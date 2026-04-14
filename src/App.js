@@ -316,11 +316,6 @@ export default function App(){
             <div>{SL("Board")}<Cards txt={spot.board} board calle={spot.calle} size={D?"lg":"md"}/></div>
             <div>{SL("Tu mano")}<Cards txt={spot.hand} size={D?"lg":"md"}/></div>
           </div>
-          {spot.leaks.length>0&&(
-            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:D?20:14}}>
-              {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
-            </div>
-          )}
           {DIV}
           {SL("¿Cuál es tu decisión?")}
           <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
@@ -351,6 +346,11 @@ export default function App(){
                 <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{spot.conc}</div>
                 {spot.el}
               </div>
+              {spot.leaks.length>0&&(
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>
+                  {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
+                </div>
+              )}
             </>
           )}
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
