@@ -154,7 +154,7 @@ export default function App(){
     return true;
   }),[spots,bloque,apunte,calle,conc]);
 
-  const allApuntes=useMemo(()=>[...new Set(spots.map(s=>s.tema_apunte).filter(Boolean))].sort(),[spots]);
+  const allApuntes=useMemo(()=>[...new Set(spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks"&&s.tema!=="Juego vs recreacionales").map(s=>s.tema_apunte))].sort(),[spots]);
   const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
 
   function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
@@ -308,10 +308,6 @@ export default function App(){
               </div>
             ))}
           </div>
-          <div style={{marginBottom:D?16:12}}>
-            <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Concepto</div>
-            <div style={{fontSize:D?16:13,fontWeight:700,color:C.blueTxt}}>{spot.conc}</div>
-          </div>
           {DIV}
           {SL("Secuencia")}
           <Timeline seq={spot.seq} calle={spot.calle} size={D?"lg":"md"}/>
@@ -350,7 +346,11 @@ export default function App(){
                 <strong>{chosen===spot.correct?"✓ Correcto":`✗ La mejor acción era: ${spot.correct}`}</strong>
                 <br/>{spot.ec}
               </div>
-              <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>{spot.el}</div>
+              <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:6,fontWeight:700}}>Concepto</div>
+                <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{spot.conc}</div>
+                {spot.el}
+              </div>
             </>
           )}
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
