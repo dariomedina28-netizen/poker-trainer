@@ -151,15 +151,15 @@ export default function App() {
       .then(r => r.text())
       .then(text => {
         const json = JSON.parse(text.replace(/^[^(]*\(/, "").replace(/\);?$/, ""));
-        const cols = json.table.cols.map(c => c.label);
-        const rows = json.table.rows.map(row => {
+        const allRows = json.table.rows.map(row =>
+          row.c.map(cell => cell && cell.v != null ? String(cell.v) : "")
+        );
+        const headers = allRows[0];
+        const parsed = allRows.slice(1).map(row => {
           const obj = {};
-          cols.forEach((col, i) => {
-            obj[col] = row.c[i] && row.c[i].v != null ? String(row.c[i].v) : "";
-          });
+          headers.forEach((h, i) => { obj[h] = row[i] || ""; });
           return obj;
-        });
-        const parsed = rows.map(parseSpot).filter(s => s.tema && s.calle && s.hand);
+        }).map(parseSpot).filter(s => s.tema && s.calle && s.hand);
         setSpots(parsed);
         setLastLoaded(new Date().toLocaleTimeString("es-MX"));
         if (parsed.length) setSpot(parsed[Math.floor(Math.random() * parsed.length)]);
