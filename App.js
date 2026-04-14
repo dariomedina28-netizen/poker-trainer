@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 
-const SHEETS_URL = "https://opensheet.elk.sh/1VxMfS1v0lRlaq6SNITzDjDOebrKYBQV8u2N1HkGyxQU/Hoja1";
+const SHEET_ID = "1VxMfS1v0lRlaq6SNITzDjDOebrKYBQV8u2N1HkGyxQU";
+const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Hoja1`;
 const TB = "SRP IP con iniciativa vs REG";
 const TR = "Juego vs recreacionales";
 
@@ -147,9 +148,18 @@ export default function App() {
   function loadSpots() {
     setLoading(true); setError(null);
     fetch(SHEETS_URL)
-      .then(r => r.json())
-      .then(data => {
-        const parsed = data.map(parseSpot).filter(s => s.tema && s.calle && s.hand);
+      .then(r => r.text())
+      .then(text => {
+        const json = JSON.parse(text.replace(/^[^(]*\(/, "").replace(/\);?$/, ""));
+        const cols = json.table.cols.map(c => c.label);
+        const rows = json.table.rows.map(row => {
+          const obj = {};
+          cols.forEach((col, i) => {
+            obj[col] = row.c[i] && row.c[i].v != null ? String(row.c[i].v) : "";
+          });
+          return obj;
+        });
+        const parsed = rows.slice(1).map(parseSpot).filter(s => s.tema && s.calle && s.hand);
         setSpots(parsed);
         setLastLoaded(new Date().toLocaleTimeString("es-MX"));
         if (parsed.length) setSpot(parsed[Math.floor(Math.random() * parsed.length)]);
