@@ -159,7 +159,7 @@ export default function App() {
           });
           return obj;
         });
-        const parsed = rows.slice(1).map(parseSpot).filter(s => s.tema && s.calle && s.hand);
+        const parsed = rows.map(parseSpot).filter(s => s.tema && s.calle && s.hand);
         setSpots(parsed);
         setLastLoaded(new Date().toLocaleTimeString("es-MX"));
         if (parsed.length) setSpot(parsed[Math.floor(Math.random() * parsed.length)]);
