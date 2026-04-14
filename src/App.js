@@ -24,6 +24,7 @@ function parseSpot(row){
     sens:row.sens==="TRUE",
     leaks:row.leaks?row.leaks.split(";").map(s=>s.trim()).filter(Boolean):[],
     opts:row.opts?row.opts.split(";").map(s=>s.trim()).filter(Boolean):null,
+    tema_apunte:row.tema_apunte||"",
   };
 }
 
@@ -33,8 +34,8 @@ function Card({c,size="md"}){
   if(c==="|")return<span style={{fontSize:10,color:C.text3,padding:"0 6px",alignSelf:"center"}}>|</span>;
   const red=c.includes("♥")||c.includes("♦");
   const rank=c.slice(0,-1),suit=c.slice(-1);
-  const w=size==="lg"?64:46, h=size==="lg"?80:58;
-  const fs=size==="lg"?26:18, ss=size==="lg"?18:14;
+  const w=size==="lg"?64:46,h=size==="lg"?80:58;
+  const fs=size==="lg"?26:18,ss=size==="lg"?18:14;
   return(
     <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
       width:w,height:h,borderRadius:10,background:"#fff",
@@ -106,6 +107,7 @@ export default function App(){
   const[error,setError]=useState(null);
   const[lastLoaded,setLastLoaded]=useState(null);
   const[bloque,setBloque]=useState("Todos");
+  const[apunte,setApunte]=useState("");
   const[calle,setCalle]=useState("Todas");
   const[conc,setConc]=useState("");
   const[rival,setRival]=useState("Base teórica");
@@ -144,11 +146,15 @@ export default function App(){
   const pool=useMemo(()=>spots.filter(s=>{
     if(bloque==="Regulares"&&s.tema!==TB)return false;
     if(bloque==="Recreacionales"&&s.tema!==TR)return false;
+    if(bloque==="Calentamiento"&&s.tema!=="Calentamiento")return false;
+    if(bloque==="Mis leaks"&&s.tema!=="Mis leaks")return false;
+    if(apunte&&s.tema_apunte!==apunte)return false;
     if(calle!=="Todas"&&s.calle!==calle)return false;
     if(conc&&s.conc!==conc)return false;
     return true;
-  }),[spots,bloque,calle,conc]);
+  }),[spots,bloque,apunte,calle,conc]);
 
+  const allApuntes=useMemo(()=>[...new Set(spots.map(s=>s.tema_apunte).filter(Boolean))].sort(),[spots]);
   const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
 
   function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
@@ -182,7 +188,6 @@ export default function App(){
 
   const LeftPanel=(
     <div style={{display:"flex",flexDirection:"column",gap:D?20:16}}>
-      {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <span style={{fontSize:D?26:20,fontWeight:800,letterSpacing:"-.02em"}}>♠ Poker Trainer</span>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -192,7 +197,6 @@ export default function App(){
       </div>
       {lastLoaded&&<div style={{fontSize:11,color:C.text3,marginTop:-12}}>Actualizado: {lastLoaded}</div>}
 
-      {/* Metrics */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
         {[["Resp.",stats.total,C.text],["✓",stats.ok,C.green],["✗",stats.ko,C.red],["Acc.",acc!==null?acc+"%":"—",C.blue]].map(([l,v,c])=>(
           <div key={l} style={{background:C.bg2,borderRadius:12,padding:D?"14px 8px":"10px 8px",textAlign:"center",border:`1px solid ${C.border}`}}>
@@ -202,27 +206,44 @@ export default function App(){
         ))}
       </div>
 
-      {/* Filters */}
+      {/* Bloque */}
+      <div>
+        <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Bloque</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {["Todos","Regulares","Recreacionales","Calentamiento","Mis leaks"].map(b=>(
+            <button key={b} onClick={()=>{setBloque(b);setApunte("");setConc("");}} style={{
+              padding:"6px 14px",borderRadius:99,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+              border:`1px solid ${bloque===b?C.blue:C.border}`,
+              background:bloque===b?C.blueBg:C.bg2,
+              color:bloque===b?C.blueTxt:C.text2,fontWeight:bloque===b?700:400}}>{b}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Filtros */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-        <div><div style={{fontSize:12,color:C.text2,marginBottom:5}}>Bloque</div>
-          <select value={bloque} onChange={e=>setBloque(e.target.value)} style={selStyle}>
-            {["Todos","Regulares","Recreacionales"].map(o=><option key={o}>{o}</option>)}
+        <div>
+          <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Apunte</div>
+          <select value={apunte} onChange={e=>setApunte(e.target.value)} style={selStyle}>
+            <option value="">Todos</option>
+            {allApuntes.map(a=><option key={a}>{a}</option>)}
           </select>
         </div>
-        <div><div style={{fontSize:12,color:C.text2,marginBottom:5}}>Calle</div>
+        <div>
+          <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Calle</div>
           <select value={calle} onChange={e=>setCalle(e.target.value)} style={selStyle}>
             {["Todas","Flop","Turn","River"].map(o=><option key={o}>{o}</option>)}
           </select>
         </div>
       </div>
-      <div><div style={{fontSize:12,color:C.text2,marginBottom:5}}>Concepto</div>
+      <div>
+        <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Concepto</div>
         <select value={conc} onChange={e=>setConc(e.target.value)} style={selStyle}>
           <option value="">Todos los conceptos</option>
           {allConcs.map(c=><option key={c}>{c}</option>)}
         </select>
       </div>
 
-      {/* Rival */}
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         <span style={{fontSize:12,color:C.text2}}>Rival:</span>
         {["Base teórica","Regular","Recreacional"].map(r=>(
@@ -233,7 +254,6 @@ export default function App(){
         ))}
       </div>
 
-      {/* Tracker */}
       {stats.total>0&&(
         <div>
           {!D&&<button onClick={()=>setShowTracker(!showTracker)} style={{...btnStyle(C.bg2,C.text2,C.border),width:"100%",marginBottom:10,textAlign:"center"}}>
@@ -280,37 +300,32 @@ export default function App(){
     <div>
       {spot?(
         <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?32:16}}>
-          {/* Meta */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
-            {[["Tema",spot.tema],["Concepto",spot.conc],["Posición",`${spot.hero} vs ${spot.vill} · ${spot.stacks}`],["Calle",spot.calle]].map(([l,v])=>(
+            {[["Tema",spot.tema],["Apunte",spot.tema_apunte||"—"],["Posición",`${spot.hero} vs ${spot.vill} · ${spot.stacks}`],["Calle",spot.calle]].map(([l,v])=>(
               <div key={l}>
                 <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{l}</div>
                 <div style={{fontSize:D?15:12,fontWeight:700,color:C.text}}>{v}</div>
               </div>
             ))}
           </div>
+          <div style={{marginBottom:D?16:12}}>
+            <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Concepto</div>
+            <div style={{fontSize:D?16:13,fontWeight:700,color:C.blueTxt}}>{spot.conc}</div>
+          </div>
           {DIV}
-
-          {/* Timeline */}
           {SL("Secuencia")}
           <Timeline seq={spot.seq} calle={spot.calle} size={D?"lg":"md"}/>
           {DIV}
-
-          {/* Board + Hand */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
             <div>{SL("Board")}<Cards txt={spot.board} board calle={spot.calle} size={D?"lg":"md"}/></div>
             <div>{SL("Tu mano")}<Cards txt={spot.hand} size={D?"lg":"md"}/></div>
           </div>
-
-          {/* Leaks */}
           {spot.leaks.length>0&&(
             <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:D?20:14}}>
               {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
             </div>
           )}
           {DIV}
-
-          {/* Decision */}
           {SL("¿Cuál es tu decisión?")}
           <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
             {getOpts(spot).map(o=>{
@@ -326,8 +341,6 @@ export default function App(){
               );
             })}
           </div>
-
-          {/* Feedback */}
           {evaled&&(
             <>
               <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
@@ -340,8 +353,6 @@ export default function App(){
               <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>{spot.el}</div>
             </>
           )}
-
-          {/* Buttons */}
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
             {!evaled
               ?<button onClick={evaluate} style={btnStyle(C.blue,"#fff",C.blue)}>Evaluar ↗</button>
