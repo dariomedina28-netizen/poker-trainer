@@ -154,7 +154,7 @@ export default function App(){
     return true;
   }),[spots,bloque,apunte,calle,conc]);
 
-  const allApuntes=useMemo(()=>[...new Set(spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks"&&s.tema!=="Juego vs recreacionales").map(s=>s.tema_apunte))].sort(),[spots]);
+  const allApuntes=useMemo(()=>[...new Set(spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks").map(s=>s.tema_apunte))].sort(),[spots]);
   const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
 
   function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
@@ -244,15 +244,7 @@ export default function App(){
         </select>
       </div>
 
-      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        <span style={{fontSize:12,color:C.text2}}>Rival:</span>
-        {["Base teórica","Regular","Recreacional"].map(r=>(
-          <button key={r} onClick={()=>setRival(r)} style={{padding:"6px 14px",borderRadius:99,fontSize:13,cursor:"pointer",fontFamily:"inherit",
-            border:`1px solid ${rival===r?C.blue:C.border}`,
-            background:rival===r?C.blueBg:C.bg2,
-            color:rival===r?C.blueTxt:C.text2}}>{r}</button>
-        ))}
-      </div>
+
 
       {stats.total>0&&(
         <div>
