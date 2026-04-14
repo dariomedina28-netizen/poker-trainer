@@ -154,7 +154,12 @@ export default function App(){
     return true;
   }),[spots,bloque,apunte,calle,conc]);
 
-  const allApuntes=useMemo(()=>[...new Set(spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks").map(s=>s.tema_apunte))].sort(),[spots]);
+  const allApuntes=useMemo(()=>{
+    let filtered = spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks");
+    if(bloque==="Regulares") filtered=filtered.filter(s=>s.tema==="SRP IP con iniciativa vs REG");
+    if(bloque==="Recreacionales") filtered=filtered.filter(s=>s.tema==="Juego vs recreacionales");
+    return [...new Set(filtered.map(s=>s.tema_apunte))].sort();
+  },[spots,bloque]);
   const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
 
   function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
