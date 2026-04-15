@@ -4,6 +4,7 @@ const SHEET_ID = "1VxMfS1v0lRlaq6SNITzDjDOebrKYBQV8u2N1HkGyxQU";
 const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Hoja1`;
 const TB = "SRP IP con iniciativa vs REG";
 const TR = "Juego vs recreacionales";
+const TV = "Rivales";
 
 const C = {
   bg:"#111827",bg2:"#1f2937",bg3:"#374151",
@@ -13,6 +14,7 @@ const C = {
   green:"#22c55e",greenBg:"#14532d",greenTxt:"#86efac",
   red:"#ef4444",redBg:"#450a0a",redTxt:"#fca5a5",
   amber:"#f59e0b",leak:"#7c2d12",leakTxt:"#ffedd5",
+  purple:"#a855f7",purpleBg:"#3b1a5f",purpleTxt:"#d8b4fe",
 };
 
 function parseSpot(row){
@@ -110,7 +112,6 @@ export default function App(){
   const[apunte,setApunte]=useState("");
   const[calle,setCalle]=useState("Todas");
   const[conc,setConc]=useState("");
-  const[rival,setRival]=useState("Base teórica");
   const[spot,setSpot]=useState(null);
   const[chosen,setChosen]=useState(null);
   const[evaled,setEvaled]=useState(false);
@@ -133,7 +134,7 @@ export default function App(){
       const headers=allRows[0];
       const parsed=allRows.slice(1).map(row=>{
         const obj={};headers.forEach((h,i)=>{obj[h]=row[i]||"";});return obj;
-      }).map(parseSpot).filter(s=>s.tema&&s.calle&&s.hand);
+      }).map(parseSpot).filter(s=>s.tema&&s.hand);
       setSpots(parsed);
       setLastLoaded(new Date().toLocaleTimeString("es-MX"));
       if(parsed.length)setSpot(parsed[Math.floor(Math.random()*parsed.length)]);
@@ -148,6 +149,7 @@ export default function App(){
     if(bloque==="Recreacionales"&&s.tema!==TR)return false;
     if(bloque==="Calentamiento"&&s.tema!=="Calentamiento")return false;
     if(bloque==="Mis leaks"&&s.tema!=="Mis leaks")return false;
+    if(bloque==="Rivales"&&s.tema!==TV)return false;
     if(apunte&&s.tema_apunte!==apunte)return false;
     if(calle!=="Todas"&&s.calle!==calle)return false;
     if(conc&&s.conc!==conc)return false;
@@ -155,11 +157,12 @@ export default function App(){
   }),[spots,bloque,apunte,calle,conc]);
 
   const allApuntes=useMemo(()=>{
-    let filtered = spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks");
-    if(bloque==="Regulares") filtered=filtered.filter(s=>s.tema==="SRP IP con iniciativa vs REG");
-    if(bloque==="Recreacionales") filtered=filtered.filter(s=>s.tema==="Juego vs recreacionales");
-    return [...new Set(filtered.map(s=>s.tema_apunte))].sort();
+    let filtered=spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks"&&s.tema!==TV);
+    if(bloque==="Regulares")filtered=filtered.filter(s=>s.tema===TB);
+    if(bloque==="Recreacionales")filtered=filtered.filter(s=>s.tema===TR);
+    return[...new Set(filtered.map(s=>s.tema_apunte))].sort();
   },[spots,bloque]);
+
   const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
 
   function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
@@ -167,8 +170,10 @@ export default function App(){
     if(!chosen||evaled||!spot)return;setEvaled(true);
     const ok=chosen===spot.correct;
     setStats(s=>({total:s.total+1,ok:s.ok+(ok?1:0),ko:s.ko+(ok?0:1)}));
-    setTrC(t=>{const n={...t};if(!n[spot.calle])n[spot.calle]={ok:0,n:0};n[spot.calle].ok+=ok?1:0;n[spot.calle].n++;return n;});
-    setTrL(t=>{const n={...t};spot.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
+    if(spot.tema!==TV){
+      setTrC(t=>{const n={...t};if(!n[spot.calle])n[spot.calle]={ok:0,n:0};n[spot.calle].ok+=ok?1:0;n[spot.calle].n++;return n;});
+      setTrL(t=>{const n={...t};spot.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
+    }
   }
   function reset(){setStats({total:0,ok:0,ko:0});setTrC({});setTrL({});nextSpot();}
 
@@ -177,7 +182,7 @@ export default function App(){
   const D=isDesktop;
   const selStyle={fontSize:D?15:14,padding:D?"10px 12px":"8px 10px",borderRadius:8,border:`1px solid ${C.border2}`,background:C.bg2,color:C.text,width:"100%",WebkitAppearance:"none"};
   const btnStyle=(bg,color,border)=>({padding:D?"12px 24px":"10px 20px",borderRadius:8,border:`1px solid ${border||C.border2}`,background:bg,color,fontSize:D?15:14,cursor:"pointer",fontWeight:600,fontFamily:"inherit"});
-  const SL=(txt)=><div style={{fontSize:D?11:10,color:C.text2,textTransform:"uppercase",letterSpacing:".07em",fontWeight:700,marginBottom:D?10:8}}>{txt}</div>;
+  const SL=(txt,col)=><div style={{fontSize:D?11:10,color:col||C.text2,textTransform:"uppercase",letterSpacing:".07em",fontWeight:700,marginBottom:D?10:8}}>{txt}</div>;
 
   if(loading)return(
     <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,color:C.text2,gap:16}}>
@@ -190,6 +195,142 @@ export default function App(){
       <button onClick={loadSpots} style={btnStyle(C.bg2,C.text,C.border2)}>Reintentar</button>
     </div>
   );
+
+  // ── SPOT DE RIVALES ──────────────────────────────
+  const RivalCard=spot&&spot.tema===TV?(
+    <div style={{background:C.bg2,border:`1px solid ${C.purple}`,borderRadius:16,padding:D?32:16}}>
+      <div style={{marginBottom:D?20:14}}>
+        <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Ejercicio</div>
+        <div style={{fontSize:D?16:13,fontWeight:700,color:C.purpleTxt}}>{spot.conc}</div>
+      </div>
+      {DIV}
+
+      {/* Stats box */}
+      <div style={{background:C.bg3,borderRadius:12,padding:D?"20px 24px":"14px 16px",marginBottom:D?20:16,border:`1px solid ${C.border2}`}}>
+        {SL("Estadísticas del rival","#a855f7")}
+        <div style={{fontSize:D?18:15,fontWeight:700,color:C.text,lineHeight:1.8,fontFamily:"monospace"}}>
+          {spot.board.split("|").map((s,i)=><div key={i}>{s.trim()}</div>)}
+        </div>
+      </div>
+
+      {/* Description */}
+      <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 20px":"12px 14px",marginBottom:D?20:16,border:`1px solid ${C.border2}`}}>
+        {SL("Observación en mesa")}
+        <div style={{fontSize:D?15:13,color:C.text,lineHeight:1.7}}>{spot.hand}</div>
+      </div>
+
+      {DIV}
+      {SL("¿Qué es este rival / cuál es el exploit?")}
+
+      {/* Options */}
+      <div style={{display:"flex",flexDirection:"column",gap:D?10:8,marginBottom:D?20:16}}>
+        {(spot.opts||[]).map(o=>{
+          let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
+          if(evaled){
+            if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
+            else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
+          }else if(o===chosen){bg=C.purpleBg;border=C.purple;color=C.purpleTxt;bw="2px";}
+          return(
+            <button key={o} onClick={()=>!evaled&&setChosen(o)} style={{
+              padding:D?"12px 20px":"10px 14px",borderRadius:10,border:`${bw} solid ${border}`,
+              background:bg,color,fontSize:D?14:13,cursor:evaled?"default":"pointer",
+              fontWeight:500,fontFamily:"inherit",textAlign:"left",lineHeight:1.4}}>{o}</button>
+          );
+        })}
+      </div>
+
+      {/* Feedback rival */}
+      {evaled&&(
+        <>
+          <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
+            background:chosen===spot.correct?C.greenBg:C.redBg,
+            color:chosen===spot.correct?C.greenTxt:C.redTxt,
+            border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
+            <strong>{chosen===spot.correct?"✓ Correcto":`✗ La respuesta era: ${spot.correct}`}</strong>
+            <br/>{spot.ec}
+          </div>
+          <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.7,marginBottom:12,color:C.text2,border:`1px solid ${C.border}`}}>
+            {SL("Explicación completa","#a855f7")}
+            {spot.el}
+          </div>
+        </>
+      )}
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {!evaled
+          ?<button onClick={evaluate} style={btnStyle(C.purple,"#fff",C.purple)}>Evaluar ↗</button>
+          :<button onClick={()=>nextSpot()} style={btnStyle(C.purple,"#fff",C.purple)}>Siguiente ↗</button>
+        }
+        <button onClick={reset} style={btnStyle(C.bg3,C.text2,C.border2)}>Reiniciar</button>
+      </div>
+    </div>
+  ):null;
+
+  // ── SPOT DE POKER NORMAL ──────────────────────────
+  const PokerCard=spot&&spot.tema!==TV?(
+    <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?32:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
+        {[["Tema",spot.tema],["Apunte",spot.tema_apunte||"—"],["Posición",`${spot.hero} vs ${spot.vill} · ${spot.stacks}`],["Calle",spot.calle]].map(([l,v])=>(
+          <div key={l}>
+            <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{l}</div>
+            <div style={{fontSize:D?15:12,fontWeight:700,color:C.text}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {DIV}
+      {SL("Secuencia")}
+      <Timeline seq={spot.seq} calle={spot.calle} size={D?"lg":"md"}/>
+      {DIV}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
+        <div>{SL("Board")}<Cards txt={spot.board} board calle={spot.calle} size={D?"lg":"md"}/></div>
+        <div>{SL("Tu mano")}<Cards txt={spot.hand} size={D?"lg":"md"}/></div>
+      </div>
+      {DIV}
+      {SL("¿Cuál es tu decisión?")}
+      <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
+        {getOpts(spot).map(o=>{
+          let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
+          if(evaled){
+            if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
+            else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
+          }else if(o===chosen){bg=C.blueBg;border=C.blue;color=C.blueTxt;bw="2px";}
+          return(
+            <button key={o} onClick={()=>!evaled&&setChosen(o)} style={{
+              padding:D?"12px 24px":"10px 18px",borderRadius:10,border:`${bw} solid ${border}`,
+              background:bg,color,fontSize:D?15:14,cursor:evaled?"default":"pointer",fontWeight:600,fontFamily:"inherit"}}>{o}</button>
+          );
+        })}
+      </div>
+      {evaled&&(
+        <>
+          <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
+            background:chosen===spot.correct?C.greenBg:C.redBg,
+            color:chosen===spot.correct?C.greenTxt:C.redTxt,
+            border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
+            <strong>{chosen===spot.correct?"✓ Correcto":`✗ La mejor acción era: ${spot.correct}`}</strong>
+            <br/>{spot.ec}
+          </div>
+          <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>
+            {SL("Concepto")}
+            <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{spot.conc}</div>
+            {spot.el}
+          </div>
+          {spot.leaks.length>0&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12}}>
+              {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
+            </div>
+          )}
+        </>
+      )}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {!evaled
+          ?<button onClick={evaluate} style={btnStyle(C.blue,"#fff",C.blue)}>Evaluar ↗</button>
+          :<button onClick={()=>nextSpot()} style={btnStyle(C.blue,"#fff",C.blue)}>Siguiente ↗</button>
+        }
+        <button onClick={reset} style={btnStyle(C.bg3,C.text2,C.border2)}>Reiniciar</button>
+      </div>
+    </div>
+  ):null;
 
   const LeftPanel=(
     <div style={{display:"flex",flexDirection:"column",gap:D?20:16}}>
@@ -211,46 +352,54 @@ export default function App(){
         ))}
       </div>
 
-      {/* Bloque */}
+      {/* Bloques */}
       <div>
-        <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Bloque</div>
+        <div style={{fontSize:12,color:C.text2,marginBottom:8}}>Bloque</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {["Todos","Regulares","Recreacionales","Calentamiento","Mis leaks"].map(b=>(
-            <button key={b} onClick={()=>{setBloque(b);setApunte("");setConc("");}} style={{
-              padding:"6px 14px",borderRadius:99,fontSize:12,cursor:"pointer",fontFamily:"inherit",
-              border:`1px solid ${bloque===b?C.blue:C.border}`,
-              background:bloque===b?C.blueBg:C.bg2,
-              color:bloque===b?C.blueTxt:C.text2,fontWeight:bloque===b?700:400}}>{b}</button>
-          ))}
+          {["Todos","Regulares","Recreacionales","Calentamiento","Mis leaks","Rivales"].map(b=>{
+            const isRival=b==="Rivales";
+            const active=bloque===b;
+            return(
+              <button key={b} onClick={()=>{setBloque(b);setApunte("");setConc("");}} style={{
+                padding:"6px 14px",borderRadius:99,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+                border:`1px solid ${active?(isRival?C.purple:C.blue):C.border}`,
+                background:active?(isRival?C.purpleBg:C.blueBg):C.bg2,
+                color:active?(isRival?C.purpleTxt:C.blueTxt):C.text2,
+                fontWeight:active?700:400}}>{b}</button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Filtros */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-        <div>
-          <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Apunte</div>
-          <select value={apunte} onChange={e=>setApunte(e.target.value)} style={selStyle}>
-            <option value="">Todos</option>
-            {allApuntes.map(a=><option key={a}>{a}</option>)}
-          </select>
-        </div>
-        <div>
-          <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Calle</div>
-          <select value={calle} onChange={e=>setCalle(e.target.value)} style={selStyle}>
-            {["Todas","Flop","Turn","River"].map(o=><option key={o}>{o}</option>)}
-          </select>
-        </div>
-      </div>
-      <div>
-        <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Concepto</div>
-        <select value={conc} onChange={e=>setConc(e.target.value)} style={selStyle}>
-          <option value="">Todos los conceptos</option>
-          {allConcs.map(c=><option key={c}>{c}</option>)}
-        </select>
-      </div>
+      {/* Filtros — solo para no-rivales */}
+      {bloque!=="Rivales"&&(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div>
+              <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Apunte</div>
+              <select value={apunte} onChange={e=>setApunte(e.target.value)} style={selStyle}>
+                <option value="">Todos</option>
+                {allApuntes.map(a=><option key={a}>{a}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Calle</div>
+              <select value={calle} onChange={e=>setCalle(e.target.value)} style={selStyle}>
+                {["Todas","Flop","Turn","River"].map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Concepto</div>
+            <select value={conc} onChange={e=>setConc(e.target.value)} style={selStyle}>
+              <option value="">Todos los conceptos</option>
+              {allConcs.map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+        </>
+      )}
 
-
-
+      {/* Tracker */}
       {stats.total>0&&(
         <div>
           {!D&&<button onClick={()=>setShowTracker(!showTracker)} style={{...btnStyle(C.bg2,C.text2,C.border),width:"100%",marginBottom:10,textAlign:"center"}}>
@@ -295,70 +444,7 @@ export default function App(){
 
   const RightPanel=(
     <div>
-      {spot?(
-        <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?32:16}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
-            {[["Tema",spot.tema],["Apunte",spot.tema_apunte||"—"],["Posición",`${spot.hero} vs ${spot.vill} · ${spot.stacks}`],["Calle",spot.calle]].map(([l,v])=>(
-              <div key={l}>
-                <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{l}</div>
-                <div style={{fontSize:D?15:12,fontWeight:700,color:C.text}}>{v}</div>
-              </div>
-            ))}
-          </div>
-          {DIV}
-          {SL("Secuencia")}
-          <Timeline seq={spot.seq} calle={spot.calle} size={D?"lg":"md"}/>
-          {DIV}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
-            <div>{SL("Board")}<Cards txt={spot.board} board calle={spot.calle} size={D?"lg":"md"}/></div>
-            <div>{SL("Tu mano")}<Cards txt={spot.hand} size={D?"lg":"md"}/></div>
-          </div>
-          {DIV}
-          {SL("¿Cuál es tu decisión?")}
-          <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
-            {getOpts(spot).map(o=>{
-              let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
-              if(evaled){
-                if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
-                else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
-              }else if(o===chosen){bg=C.blueBg;border=C.blue;color=C.blueTxt;bw="2px";}
-              return(
-                <button key={o} onClick={()=>!evaled&&setChosen(o)} style={{
-                  padding:D?"12px 24px":"10px 18px",borderRadius:10,border:`${bw} solid ${border}`,
-                  background:bg,color,fontSize:D?15:14,cursor:evaled?"default":"pointer",fontWeight:600,fontFamily:"inherit"}}>{o}</button>
-              );
-            })}
-          </div>
-          {evaled&&(
-            <>
-              <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
-                background:chosen===spot.correct?C.greenBg:C.redBg,
-                color:chosen===spot.correct?C.greenTxt:C.redTxt,
-                border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
-                <strong>{chosen===spot.correct?"✓ Correcto":`✗ La mejor acción era: ${spot.correct}`}</strong>
-                <br/>{spot.ec}
-              </div>
-              <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>
-                <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:6,fontWeight:700}}>Concepto</div>
-                <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{spot.conc}</div>
-                {spot.el}
-              </div>
-              {spot.leaks.length>0&&(
-                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>
-                  {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
-                </div>
-              )}
-            </>
-          )}
-          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            {!evaled
-              ?<button onClick={evaluate} style={btnStyle(C.blue,"#fff",C.blue)}>Evaluar ↗</button>
-              :<button onClick={()=>nextSpot()} style={btnStyle(C.blue,"#fff",C.blue)}>Siguiente ↗</button>
-            }
-            <button onClick={reset} style={btnStyle(C.bg3,C.text2,C.border2)}>Reiniciar</button>
-          </div>
-        </div>
-      ):(
+      {spot?(RivalCard||PokerCard):(
         <div style={{padding:"3rem",textAlign:"center",color:C.text2,fontSize:16}}>No hay spots con esa configuración.</div>
       )}
     </div>
