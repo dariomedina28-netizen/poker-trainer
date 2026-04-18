@@ -1,0 +1,755 @@
+import { useState, useEffect, useMemo } from "react";
+
+const SHEET_ID = "1VxMfS1v0lRlaq6SNITzDjDOebrKYBQV8u2N1HkGyxQU";
+const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Hoja1`;
+const TB = "SRP IP con iniciativa vs REG";
+const TR = "Juego vs recreacionales";
+const TV = "Rivales";
+
+const SKILL_GENERAR = `# Skill: Generar Escenario de Entrenamiento
+Solo en el bloque Práctica Libre.
+
+## Modos de generación
+### Aleatorio
+Generar un spot sorpresa sin input del usuario. Variar posición, calle y tipo de oponente cada vez.
+### Dirigido
+El usuario describe lo que quiere practicar. Interpretar su descripción y generar el spot correspondiente.
+
+## Variables obligatorias de cada spot
+- Posición del héroe y rival
+- Tipo de oponente: Recreacional / Regular / Desconocido
+- Calle: Preflop / Flop / Turn / River
+- Acción previa
+- Board (si aplica)
+- Mano del héroe
+- Pot actual en BBs
+- Stack efectivo en BBs
+- Decisión a tomar
+
+## Reglas
+- No repetir posición y calle consecutivamente en modo aleatorio
+- 1 spot de preflop por cada 4 postflop mínimo
+- Oponente recreacional: sesgo hacia spots de valor
+- Oponente regular: spots más cercanos a GTO
+
+## Formato de salida EXACTO — no añadas nada antes ni después
+🃏 SPOT — PRÁCTICA LIBRE
+
+Calle: [X] | Posición: [X] vs [X] | Oponente: [X]
+Stack efectivo: [X bb] | Pot: [X bb]
+
+Acción previa:
+[descripción]
+
+Board: [X X X]
+Tu mano: [X X]
+
+¿Qué haces?
+[ ] Bet [ ] Check [ ] Call [ ] Fold [ ] Raise`;
+
+const SKILL_EVALUAR = `# Skill: Evaluar Decisión del Usuario
+## Marco de análisis según rival
+- Recreacional: explotativo — maximizar valor, simplificar
+- Regular: base GTO con ajustes si hay reads
+- Desconocido: GTO conservador
+
+## Evaluar en este orden
+1. ¿Consistente con el rango que representamos?
+2. ¿Equity suficiente para la acción?
+3. ¿Pot odds justifican la acción?
+4. ¿La posición favorece o penaliza?
+5. ¿El tipo de oponente cambia la jugada óptima?
+
+## Formato fijo de feedback
+[✅ CORRECTO / ❌ INCORRECTO / ⚠️ ACEPTABLE]
+
+Explicación corta:
+[1-2 líneas máximo]
+
+---
+¿Quieres análisis completo? (S/N)
+
+## Si se solicita análisis completo
+Concepto aplicado: [X]
+Equity aproximado: [X%] (cuando aplique)
+Pot odds: [X:1] (en river y draws siempre)
+Jugada óptima: [X]
+
+## Reglas
+- Nunca solo correcto/incorrecto sin explicación
+- Pot odds y equity siempre en river y draws
+- Si falla el mismo concepto dos veces seguidas, señalarlo
+- Tono: directo y técnico`;
+
+async function callClaude(system, userMsg) {
+  const key = process.env.REACT_APP_ANTHROPIC_API_KEY;
+  if (!key) throw new Error("Falta REACT_APP_ANTHROPIC_API_KEY en .env.local");
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system,
+      messages: [{ role: "user", content: userMsg }],
+    }),
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  const data = await res.json();
+  return data.content[0].text;
+}
+
+const C = {
+  bg:"#111827",bg2:"#1f2937",bg3:"#374151",
+  border:"#374151",border2:"#4b5563",
+  text:"#f9fafb",text2:"#9ca3af",text3:"#6b7280",
+  blue:"#3b82f6",blueBg:"#1e3a5f",blueTxt:"#93c5fd",
+  green:"#22c55e",greenBg:"#14532d",greenTxt:"#86efac",
+  red:"#ef4444",redBg:"#450a0a",redTxt:"#fca5a5",
+  amber:"#f59e0b",leak:"#7c2d12",leakTxt:"#ffedd5",
+  purple:"#a855f7",purpleBg:"#3b1a5f",purpleTxt:"#d8b4fe",
+};
+
+function parseSpot(row){
+  return{
+    tema:row.tema||"",calle:row.calle||"",conc:row.conc||"",
+    hero:row.hero||"",vill:row.vill||"",stacks:row.stacks||"",
+    seq:row.seq||"",board:row.board||"",hand:row.hand||"",
+    correct:row.correct||"",ec:row.ec||"",el:row.el||"",
+    sens:row.sens==="TRUE",
+    leaks:row.leaks?row.leaks.split(";").map(s=>s.trim()).filter(Boolean):[],
+    opts:row.opts?row.opts.split(";").map(s=>s.trim()).filter(Boolean):null,
+    tema_apunte:row.tema_apunte||"",
+  };
+}
+
+function parseCards(txt){return txt?txt.trim().split(/\s+/).filter(Boolean):[];}
+
+function Card({c,size="md"}){
+  if(c==="|")return<span style={{fontSize:10,color:C.text3,padding:"0 6px",alignSelf:"center"}}>|</span>;
+  const red=c.includes("♥")||c.includes("♦");
+  const rank=c.slice(0,-1),suit=c.slice(-1);
+  const w=size==="lg"?64:46,h=size==="lg"?80:58;
+  const fs=size==="lg"?26:18,ss=size==="lg"?18:14;
+  return(
+    <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      width:w,height:h,borderRadius:10,background:"#fff",
+      border:`2px solid ${red?"#fca5a5":C.border2}`,fontWeight:800,userSelect:"none",flexShrink:0}}>
+      <span style={{fontSize:fs,lineHeight:1,color:red?"#dc2626":"#111827"}}>{rank}</span>
+      <span style={{fontSize:ss,lineHeight:1,marginTop:2,color:red?"#dc2626":"#111827"}}>{suit}</span>
+    </div>
+  );
+}
+
+function Cards({txt,board,calle,size="md"}){
+  let cards=[];
+  if(board){
+    const parts=txt.split("|").map(s=>s.trim());
+    const show=calle==="Flop"?[parts[0]]:calle==="Turn"?parts.slice(0,2):parts;
+    show.forEach((seg,i)=>{if(i>0)cards.push("|");parseCards(seg).forEach(c=>cards.push(c));});
+  }else{cards=parseCards(txt);}
+  return<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>{cards.map((c,i)=><Card key={i} c={c} size={size}/>)}</div>;
+}
+
+function Timeline({seq,calle,size="md"}){
+  const streets=["Preflop","Flop","Turn","River"];
+  const activeIdx={Flop:1,Turn:2,River:3}[calle]||0;
+  const parts=seq.split("|").map(s=>s.trim());
+  const actions={};
+  parts.forEach(p=>{
+    const pl=p.toLowerCase();
+    if(!pl.includes("flop:")&&!pl.includes("turn:")&&!pl.includes("river:"))actions["Preflop"]=p.replace(/preflop:/i,"").trim().slice(0,38);
+    if(pl.includes("flop:"))actions["Flop"]=p.replace(/flop:/i,"").trim().slice(0,38);
+    if(pl.includes("turn:"))actions["Turn"]=p.replace(/turn:/i,"").trim().slice(0,38);
+    if(pl.includes("river:"))actions["River"]=p.replace(/river:/i,"").trim().slice(0,38);
+  });
+  const dotSize=size==="lg"?36:28;
+  const fs=size==="lg"?13:11;
+  return(
+    <div style={{display:"flex",gap:0,overflowX:"auto",paddingBottom:4,marginBottom:20}}>
+      {streets.map((s,i)=>{
+        const active=i===activeIdx;
+        return(
+          <div key={s} style={{display:"flex",flexDirection:"column",alignItems:"center",minWidth:size==="lg"?100:72,position:"relative",flex:1}}>
+            {i<3&&<div style={{position:"absolute",top:dotSize/2,left:"50%",width:"100%",height:1,background:C.border,zIndex:0}}/>}
+            <div style={{width:dotSize,height:dotSize,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:fs,fontWeight:700,zIndex:1,
+              background:active?C.blue:C.bg3,color:active?"#fff":C.text2,
+              border:`2px solid ${active?C.blue:C.border}`}}>{s[0]}</div>
+            <div style={{fontSize:fs,color:active?C.blueTxt:C.text2,marginTop:6,fontWeight:700}}>{s}</div>
+            {actions[s]&&<div style={{fontSize:size==="lg"?11:9,color:C.text3,marginTop:3,textAlign:"center",maxWidth:size==="lg"?120:80,lineHeight:1.4}}>{actions[s]}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function getOpts(s){
+  if(s.opts&&s.opts.length)return s.opts;
+  const seg=s.seq.toLowerCase().split("|").find(p=>p.includes(s.calle.toLowerCase()+":"))||"";
+  if(seg.includes("overbet")||(seg.includes("apuesta")&&!seg.includes("checkea")))return["Fold","Call","Raise 75%","Raise 125%"];
+  if(seg.includes("donkea"))return["Fold","Call","Raise 75%","Raise 125%"];
+  if(seg.includes("resube"))return["Fold","Call"];
+  return["Check","Bet 25%","Bet 33%","Bet 50%","Bet 75%","Bet 80%","Bet 125%"];
+}
+
+const DIV=<div style={{borderTop:`1px solid ${C.border}`,margin:"16px 0"}}/>;
+
+export default function App(){
+  const[spots,setSpots]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[error,setError]=useState(null);
+  const[lastLoaded,setLastLoaded]=useState(null);
+  const[bloque,setBloque]=useState("Todos");
+  const[apunte,setApunte]=useState("");
+  const[calle,setCalle]=useState("Todas");
+  const[conc,setConc]=useState("");
+  const[spot,setSpot]=useState(null);
+  const[chosen,setChosen]=useState(null);
+  const[evaled,setEvaled]=useState(false);
+  const[stats,setStats]=useState({total:0,ok:0,ko:0});
+  const[trC,setTrC]=useState({});
+  const[trL,setTrL]=useState({});
+  const[showTracker,setShowTracker]=useState(false);
+  const[isDesktop,setIsDesktop]=useState(window.innerWidth>=900);
+  const[plMode,setPlMode]=useState(null);
+  const[plInput,setPlInput]=useState("");
+  const[plSpot,setPlSpot]=useState(null);
+  const[plOpts,setPlOpts]=useState([]);
+  const[plChosen,setPlChosen]=useState(null);
+  const[plEvaled,setPlEvaled]=useState(false);
+  const[plFeedback,setPlFeedback]=useState(null);
+  const[plLoading,setPlLoading]=useState(false);
+  const[plWantFull,setPlWantFull]=useState(false);
+  const[plFullFeedback,setPlFullFeedback]=useState(null);
+  const[plLastMeta,setPlLastMeta]=useState("");
+
+  useEffect(()=>{
+    const h=()=>setIsDesktop(window.innerWidth>=900);
+    window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);
+  },[]);
+
+  function loadSpots(){
+    setLoading(true);setError(null);
+    fetch(SHEETS_URL).then(r=>r.text()).then(text=>{
+      const json=JSON.parse(text.replace(/^[^(]*\(/,"").replace(/\);?$/,""));
+      const allRows=json.table.rows.map(row=>row.c.map(cell=>cell&&cell.v!=null?String(cell.v):""));
+      const headers=allRows[0];
+      const parsed=allRows.slice(1).map(row=>{
+        const obj={};headers.forEach((h,i)=>{obj[h]=row[i]||"";});return obj;
+      }).map(parseSpot).filter(s=>s.tema&&s.hand);
+      setSpots(parsed);
+      setLastLoaded(new Date().toLocaleTimeString("es-MX"));
+      if(parsed.length)setSpot(parsed[Math.floor(Math.random()*parsed.length)]);
+      setLoading(false);
+    }).catch(()=>{setError("No se pudo conectar al Google Sheets.");setLoading(false);});
+  }
+
+  useEffect(()=>{loadSpots();},[]);
+
+  const pool=useMemo(()=>spots.filter(s=>{
+    if(bloque==="Regulares"&&s.tema!==TB)return false;
+    if(bloque==="Recreacionales"&&s.tema!==TR)return false;
+    if(bloque==="Calentamiento"&&s.tema!=="Calentamiento")return false;
+    if(bloque==="Mis leaks"&&s.tema!=="Mis leaks")return false;
+    if(bloque==="Rivales"&&s.tema!==TV)return false;
+    if(apunte&&s.tema_apunte!==apunte)return false;
+    if(calle!=="Todas"&&s.calle!==calle)return false;
+    if(conc&&s.conc!==conc)return false;
+    return true;
+  }),[spots,bloque,apunte,calle,conc]);
+
+  const allApuntes=useMemo(()=>{
+    let filtered=spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks"&&s.tema!==TV);
+    if(bloque==="Regulares")filtered=filtered.filter(s=>s.tema===TB);
+    if(bloque==="Recreacionales")filtered=filtered.filter(s=>s.tema===TR);
+    return[...new Set(filtered.map(s=>s.tema_apunte))].sort();
+  },[spots,bloque]);
+
+  const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
+
+  function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
+  function evaluate(){
+    if(!chosen||evaled||!spot)return;setEvaled(true);
+    const ok=chosen===spot.correct;
+    setStats(s=>({total:s.total+1,ok:s.ok+(ok?1:0),ko:s.ko+(ok?0:1)}));
+    if(spot.tema!==TV){
+      setTrC(t=>{const n={...t};if(!n[spot.calle])n[spot.calle]={ok:0,n:0};n[spot.calle].ok+=ok?1:0;n[spot.calle].n++;return n;});
+      setTrL(t=>{const n={...t};spot.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
+    }
+  }
+  function reset(){setStats({total:0,ok:0,ko:0});setTrC({});setTrL({});nextSpot();}
+
+  function resetPL(){setPlMode(null);setPlInput("");setPlSpot(null);setPlOpts([]);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlLoading(false);setPlWantFull(false);setPlFullFeedback(null);}
+
+  async function generarSpot(){
+    setPlLoading(true);setPlSpot(null);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlWantFull(false);setPlFullFeedback(null);
+    try{
+      const userMsg=plMode==="aleatorio"
+        ?`Genera un spot aleatorio.${plLastMeta?` Evita repetir: ${plLastMeta}`:""}`
+        :`Genera un spot sobre: ${plInput}`;
+      const text=await callClaude(SKILL_GENERAR,userMsg);
+      setPlSpot(text);
+      const matches=text.match(/\[\s*\]\s*([^\[^\n]+)/g)||[];
+      const opts=matches.map(m=>m.replace(/\[\s*\]\s*/,"").trim()).filter(Boolean);
+      setPlOpts(opts.length?opts:["Bet","Check","Call","Fold","Raise"]);
+      const calleM=text.match(/Calle:\s*(\w+)/);
+      const posM=text.match(/Posición:\s*([^|]+)/);
+      if(calleM&&posM)setPlLastMeta(`${calleM[1]} / ${posM[1].trim()}`);
+    }catch(e){setPlSpot(`Error: ${e.message}`);}
+    setPlLoading(false);
+  }
+
+  async function evaluarPL(opcion){
+    if(plEvaled||!plSpot)return;
+    setPlChosen(opcion);setPlLoading(true);
+    try{
+      const text=await callClaude(SKILL_EVALUAR,`Spot:\n${plSpot}\n\nEl usuario eligió: ${opcion}`);
+      setPlFeedback(text);setPlEvaled(true);
+    }catch(e){setPlFeedback(`Error: ${e.message}`);}
+    setPlLoading(false);
+  }
+
+  async function pedirAnalisis(){
+    if(!plFeedback)return;
+    setPlLoading(true);
+    try{
+      const text=await callClaude(SKILL_EVALUAR,`Spot:\n${plSpot}\n\nEl usuario eligió: ${plChosen}\n\nEl usuario solicita análisis completo.`);
+      setPlFullFeedback(text);setPlWantFull(true);
+    }catch(e){setPlFullFeedback(`Error: ${e.message}`);}
+    setPlLoading(false);
+  }
+
+  const acc=stats.total>0?Math.round(stats.ok/stats.total*100):null;
+  const worst=Object.entries(trL).filter(([,v])=>v.n>=1).sort((a,b)=>a[1].ok/a[1].n-b[1].ok/b[1].n).slice(0,5);
+  const D=isDesktop;
+  const selStyle={fontSize:D?15:14,padding:D?"10px 12px":"8px 10px",borderRadius:8,border:`1px solid ${C.border2}`,background:C.bg2,color:C.text,width:"100%",WebkitAppearance:"none"};
+  const btnStyle=(bg,color,border)=>({padding:D?"12px 24px":"10px 20px",borderRadius:8,border:`1px solid ${border||C.border2}`,background:bg,color,fontSize:D?15:14,cursor:"pointer",fontWeight:600,fontFamily:"inherit"});
+  const SL=(txt,col)=><div style={{fontSize:D?11:10,color:col||C.text2,textTransform:"uppercase",letterSpacing:".07em",fontWeight:700,marginBottom:D?10:8}}>{txt}</div>;
+
+  if(loading)return(
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,color:C.text2,gap:16}}>
+      <div style={{fontSize:48}}>♠</div><div style={{fontSize:16}}>Cargando spots…</div>
+    </div>
+  );
+  if(error)return(
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,padding:24,gap:16}}>
+      <div style={{background:C.redBg,color:C.redTxt,padding:"14px 18px",borderRadius:10,fontSize:14,textAlign:"center"}}>{error}</div>
+      <button onClick={loadSpots} style={btnStyle(C.bg2,C.text,C.border2)}>Reintentar</button>
+    </div>
+  );
+
+  // ── SPOT DE RIVALES ──────────────────────────────
+  const RivalCard=spot&&spot.tema===TV?(
+    <div style={{background:C.bg2,border:`1px solid ${C.purple}`,borderRadius:16,padding:D?32:16}}>
+      <div style={{marginBottom:D?20:14}}>
+        <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Ejercicio</div>
+        <div style={{fontSize:D?16:13,fontWeight:700,color:C.purpleTxt}}>{spot.conc}</div>
+      </div>
+      {DIV}
+
+      {/* Stats box */}
+      <div style={{background:C.bg3,borderRadius:12,padding:D?"20px 24px":"14px 16px",marginBottom:D?20:16,border:`1px solid ${C.border2}`}}>
+        {SL("Estadísticas del rival","#a855f7")}
+        <div style={{fontSize:D?18:15,fontWeight:700,color:C.text,lineHeight:1.8,fontFamily:"monospace"}}>
+          {spot.board.split("|").map((s,i)=><div key={i}>{s.trim()}</div>)}
+        </div>
+      </div>
+
+      {/* Description */}
+      <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 20px":"12px 14px",marginBottom:D?20:16,border:`1px solid ${C.border2}`}}>
+        {SL("Observación en mesa")}
+        <div style={{fontSize:D?15:13,color:C.text,lineHeight:1.7}}>{spot.hand}</div>
+      </div>
+
+      {DIV}
+      {SL("¿Qué es este rival / cuál es el exploit?")}
+
+      {/* Options */}
+      <div style={{display:"flex",flexDirection:"column",gap:D?10:8,marginBottom:D?20:16}}>
+        {(spot.opts||[]).map(o=>{
+          let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
+          if(evaled){
+            if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
+            else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
+          }else if(o===chosen){bg=C.purpleBg;border=C.purple;color=C.purpleTxt;bw="2px";}
+          return(
+            <button key={o} onClick={()=>!evaled&&setChosen(o)} style={{
+              padding:D?"12px 20px":"10px 14px",borderRadius:10,border:`${bw} solid ${border}`,
+              background:bg,color,fontSize:D?14:13,cursor:evaled?"default":"pointer",
+              fontWeight:500,fontFamily:"inherit",textAlign:"left",lineHeight:1.4}}>{o}</button>
+          );
+        })}
+      </div>
+
+      {/* Feedback rival */}
+      {evaled&&(
+        <>
+          <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
+            background:chosen===spot.correct?C.greenBg:C.redBg,
+            color:chosen===spot.correct?C.greenTxt:C.redTxt,
+            border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
+            <strong>{chosen===spot.correct?"✓ Correcto":`✗ La respuesta era: ${spot.correct}`}</strong>
+            <br/>{spot.ec}
+          </div>
+          <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.7,marginBottom:12,color:C.text2,border:`1px solid ${C.border}`}}>
+            {SL("Explicación completa","#a855f7")}
+            {spot.el}
+          </div>
+        </>
+      )}
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {!evaled
+          ?<button onClick={evaluate} style={btnStyle(C.purple,"#fff",C.purple)}>Evaluar ↗</button>
+          :<button onClick={()=>nextSpot()} style={btnStyle(C.purple,"#fff",C.purple)}>Siguiente ↗</button>
+        }
+        <button onClick={reset} style={btnStyle(C.bg3,C.text2,C.border2)}>Reiniciar</button>
+      </div>
+    </div>
+  ):null;
+
+  // ── SPOT DE POKER NORMAL ──────────────────────────
+  const PokerCard=spot&&spot.tema!==TV?(
+    <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?32:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
+        {[["Tema",spot.tema],["Apunte",spot.tema_apunte||"—"],["Posición",`${spot.hero} vs ${spot.vill} · ${spot.stacks}`],["Calle",spot.calle]].map(([l,v])=>(
+          <div key={l}>
+            <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{l}</div>
+            <div style={{fontSize:D?15:12,fontWeight:700,color:C.text}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {DIV}
+      {SL("Secuencia")}
+      <Timeline seq={spot.seq} calle={spot.calle} size={D?"lg":"md"}/>
+      {DIV}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
+        <div>{SL("Board")}<Cards txt={spot.board} board calle={spot.calle} size={D?"lg":"md"}/></div>
+        <div>{SL("Tu mano")}<Cards txt={spot.hand} size={D?"lg":"md"}/></div>
+      </div>
+      {DIV}
+      {SL("¿Cuál es tu decisión?")}
+      <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
+        {getOpts(spot).map(o=>{
+          let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
+          if(evaled){
+            if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
+            else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
+          }else if(o===chosen){bg=C.blueBg;border=C.blue;color=C.blueTxt;bw="2px";}
+          return(
+            <button key={o} onClick={()=>!evaled&&setChosen(o)} style={{
+              padding:D?"12px 24px":"10px 18px",borderRadius:10,border:`${bw} solid ${border}`,
+              background:bg,color,fontSize:D?15:14,cursor:evaled?"default":"pointer",fontWeight:600,fontFamily:"inherit"}}>{o}</button>
+          );
+        })}
+      </div>
+      {evaled&&(
+        <>
+          <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
+            background:chosen===spot.correct?C.greenBg:C.redBg,
+            color:chosen===spot.correct?C.greenTxt:C.redTxt,
+            border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
+            <strong>{chosen===spot.correct?"✓ Correcto":`✗ La mejor acción era: ${spot.correct}`}</strong>
+            <br/>{spot.ec}
+          </div>
+          <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>
+            {SL("Concepto")}
+            <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{spot.conc}</div>
+            {spot.el}
+          </div>
+          {spot.leaks.length>0&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12}}>
+              {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
+            </div>
+          )}
+        </>
+      )}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {!evaled
+          ?<button onClick={evaluate} style={btnStyle(C.blue,"#fff",C.blue)}>Evaluar ↗</button>
+          :<button onClick={()=>nextSpot()} style={btnStyle(C.blue,"#fff",C.blue)}>Siguiente ↗</button>
+        }
+        <button onClick={reset} style={btnStyle(C.bg3,C.text2,C.border2)}>Reiniciar</button>
+      </div>
+    </div>
+  ):null;
+
+  const PracticaLibreCard=(
+    <div style={{background:C.bg2,border:`1px solid ${C.green}`,borderRadius:16,padding:D?32:16}}>
+      <div style={{marginBottom:D?20:14}}>
+        <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Bloque</div>
+        <div style={{fontSize:D?18:15,fontWeight:700,color:C.greenTxt}}>🃏 Práctica Libre</div>
+      </div>
+      {DIV}
+
+      {/* Selector de modo */}
+      {!plMode&&(
+        <div>
+          {SL("¿Cómo quieres practicar?",C.green)}
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8}}>
+            <button onClick={()=>setPlMode("aleatorio")} style={{...btnStyle(C.greenBg,C.greenTxt,C.green),flex:1}}>
+              🎲 Aleatorio
+            </button>
+            <button onClick={()=>setPlMode("dirigido")} style={{...btnStyle(C.bg3,C.text,C.border2),flex:1}}>
+              🎯 Dirigido
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modo seleccionado */}
+      {plMode&&(
+        <>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:D?16:12}}>
+            {SL(plMode==="aleatorio"?"Modo: Aleatorio 🎲":"Modo: Dirigido 🎯",C.green)}
+            <button onClick={resetPL} style={{fontSize:12,background:"none",border:"none",color:C.text3,cursor:"pointer",textDecoration:"underline"}}>cambiar modo</button>
+          </div>
+
+          {/* Input dirigido */}
+          {plMode==="dirigido"&&!plSpot&&(
+            <div style={{marginBottom:D?16:12}}>
+              {SL("¿Qué quieres practicar?")}
+              <textarea
+                value={plInput}
+                onChange={e=>setPlInput(e.target.value)}
+                placeholder="Ej: spots de river con draws que no llegaron vs recreacional, c-bet en tableros paired, etc."
+                rows={3}
+                style={{width:"100%",padding:"10px 12px",borderRadius:8,border:`1px solid ${C.border2}`,background:C.bg3,color:C.text,fontSize:D?14:13,fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}
+              />
+            </div>
+          )}
+
+          {/* Botón generar */}
+          {!plSpot&&(
+            <button
+              onClick={generarSpot}
+              disabled={plLoading||(plMode==="dirigido"&&!plInput.trim())}
+              style={{...btnStyle(C.green,"#fff",C.green),opacity:(plLoading||(plMode==="dirigido"&&!plInput.trim()))?0.5:1,marginBottom:D?16:12}}>
+              {plLoading?"Generando spot…":"Generar spot ↗"}
+            </button>
+          )}
+
+          {/* Spot generado */}
+          {plSpot&&(
+            <>
+              <div style={{background:C.bg3,borderRadius:12,padding:D?"18px 20px":"14px 16px",marginBottom:D?20:16,border:`1px solid ${C.border2}`,fontFamily:"inherit",fontSize:D?14:13,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap"}}>
+                {plSpot}
+              </div>
+
+              {/* Opciones */}
+              {!plEvaled&&(
+                <div style={{marginBottom:D?16:12}}>
+                  {SL("Tu decisión")}
+                  <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8}}>
+                    {plOpts.map(o=>(
+                      <button key={o} onClick={()=>!plEvaled&&!plLoading&&setPlChosen(o)} style={{
+                        padding:D?"12px 20px":"10px 14px",borderRadius:10,
+                        border:`${plChosen===o?"2px":"1px"} solid ${plChosen===o?C.green:C.border2}`,
+                        background:plChosen===o?C.greenBg:C.bg3,
+                        color:plChosen===o?C.greenTxt:C.text,
+                        fontSize:D?14:13,cursor:"pointer",fontWeight:plChosen===o?700:500,fontFamily:"inherit"
+                      }}>{o}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Botón evaluar */}
+              {!plEvaled&&(
+                <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:D?16:12}}>
+                  <button onClick={()=>evaluarPL(plChosen)} disabled={!plChosen||plLoading}
+                    style={{...btnStyle(C.green,"#fff",C.green),opacity:(!plChosen||plLoading)?0.5:1}}>
+                    {plLoading?"Evaluando…":"Evaluar ↗"}
+                  </button>
+                  <button onClick={()=>{setPlSpot(null);setPlOpts([]);generarSpot();}} style={btnStyle(C.bg3,C.text2,C.border2)}>Otro spot</button>
+                </div>
+              )}
+
+              {/* Feedback */}
+              {plFeedback&&(
+                <div style={{marginBottom:D?14:12}}>
+                  <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.8,color:C.text,border:`1px solid ${C.border}`,whiteSpace:"pre-wrap"}}>
+                    {plFeedback}
+                  </div>
+                  {!plWantFull&&(
+                    <button onClick={pedirAnalisis} disabled={plLoading}
+                      style={{...btnStyle(C.bg3,C.greenTxt,C.green),marginTop:10,fontSize:D?13:12,opacity:plLoading?0.5:1}}>
+                      {plLoading?"Cargando…":"Ver análisis completo →"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Análisis completo */}
+              {plFullFeedback&&(
+                <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.8,color:C.text2,border:`1px solid ${C.border}`,whiteSpace:"pre-wrap",marginBottom:D?14:12}}>
+                  {SL("Análisis completo",C.green)}
+                  {plFullFeedback}
+                </div>
+              )}
+
+              {/* Botones post-eval */}
+              {plEvaled&&(
+                <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                  <button onClick={()=>{setPlSpot(null);setPlOpts([]);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlWantFull(false);setPlFullFeedback(null);generarSpot();}}
+                    style={btnStyle(C.green,"#fff",C.green)}>
+                    Siguiente ↗
+                  </button>
+                  <button onClick={resetPL} style={btnStyle(C.bg3,C.text2,C.border2)}>Reiniciar</button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  const LeftPanel=(
+    <div style={{display:"flex",flexDirection:"column",gap:D?20:16}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontSize:D?26:20,fontWeight:800,letterSpacing:"-.02em"}}>♠ Poker Trainer</span>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <span style={{fontSize:12,padding:"4px 12px",borderRadius:99,background:C.bg2,border:`1px solid ${C.border}`,color:C.text2}}>{pool.length}/{spots.length}</span>
+          <button onClick={loadSpots} title="Actualizar" style={{fontSize:20,background:"none",border:"none",color:C.text2,cursor:"pointer",padding:"4px 8px"}}>↺</button>
+        </div>
+      </div>
+      {lastLoaded&&<div style={{fontSize:11,color:C.text3,marginTop:-12}}>Actualizado: {lastLoaded}</div>}
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+        {[["Resp.",stats.total,C.text],["✓",stats.ok,C.green],["✗",stats.ko,C.red],["Acc.",acc!==null?acc+"%":"—",C.blue]].map(([l,v,c])=>(
+          <div key={l} style={{background:C.bg2,borderRadius:12,padding:D?"14px 8px":"10px 8px",textAlign:"center",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11,color:C.text2,marginBottom:6}}>{l}</div>
+            <div style={{fontSize:D?26:20,fontWeight:800,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Bloques */}
+      <div>
+        <div style={{fontSize:12,color:C.text2,marginBottom:8}}>Bloque</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {["Todos","Regulares","Recreacionales","Calentamiento","Mis leaks","Rivales","Práctica Libre"].map(b=>{
+            const isRival=b==="Rivales";
+            const isPL=b==="Práctica Libre";
+            const active=bloque===b;
+            const accentCol=isPL?C.green:isRival?C.purple:C.blue;
+            const accentBg=isPL?C.greenBg:isRival?C.purpleBg:C.blueBg;
+            const accentTxt=isPL?C.greenTxt:isRival?C.purpleTxt:C.blueTxt;
+            return(
+              <button key={b} onClick={()=>{setBloque(b);setApunte("");setConc("");}} style={{
+                padding:"6px 14px",borderRadius:99,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+                border:`1px solid ${active?accentCol:C.border}`,
+                background:active?accentBg:C.bg2,
+                color:active?accentTxt:C.text2,
+                fontWeight:active?700:400}}>{b}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Filtros — solo para no-rivales y no Práctica Libre */}
+      {bloque!=="Rivales"&&bloque!=="Práctica Libre"&&(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div>
+              <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Apunte</div>
+              <select value={apunte} onChange={e=>setApunte(e.target.value)} style={selStyle}>
+                <option value="">Todos</option>
+                {allApuntes.map(a=><option key={a}>{a}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Calle</div>
+              <select value={calle} onChange={e=>setCalle(e.target.value)} style={selStyle}>
+                {["Todas","Flop","Turn","River"].map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:12,color:C.text2,marginBottom:5}}>Concepto</div>
+            <select value={conc} onChange={e=>setConc(e.target.value)} style={selStyle}>
+              <option value="">Todos los conceptos</option>
+              {allConcs.map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+        </>
+      )}
+
+      {/* Tracker */}
+      {stats.total>0&&(
+        <div>
+          {!D&&<button onClick={()=>setShowTracker(!showTracker)} style={{...btnStyle(C.bg2,C.text2,C.border),width:"100%",marginBottom:10,textAlign:"center"}}>
+            {showTracker?"▲ Ocultar stats":"▼ Ver estadísticas"}
+          </button>}
+          {(D||showTracker)&&(
+            <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:14,padding:D?20:16}}>
+              <div style={{fontSize:D?15:13,fontWeight:700,marginBottom:12}}>Por calle</div>
+              {Object.entries(trC).map(([k,v])=>{
+                const a=Math.round(v.ok/v.n*100);
+                const col=a>=70?C.green:a>=40?C.amber:C.red;
+                return(
+                  <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+                    <span style={{fontSize:D?14:13}}>{k}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:13,color:C.text2}}>{v.ok}/{v.n}</span>
+                      <div style={{width:70,height:6,background:C.bg3,borderRadius:3,overflow:"hidden"}}>
+                        <div style={{width:a+"%",height:"100%",background:col,borderRadius:3}}/>
+                      </div>
+                      <span style={{fontSize:13,color:col,fontWeight:700,minWidth:36}}>{a}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+              {worst.length>0&&(
+                <>
+                  <div style={{fontSize:D?15:13,fontWeight:700,marginTop:18,marginBottom:12}}>Leaks con más errores</div>
+                  {worst.map(([k,v])=>(
+                    <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
+                      <span style={{fontSize:D?13:12,color:C.text2,flex:1,paddingRight:8}}>{k}</span>
+                      <span style={{fontSize:13,color:C.red,fontWeight:700}}>{Math.round(v.ok/v.n*100)}%</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const RightPanel=(
+    <div>
+      {bloque==="Práctica Libre"
+        ? PracticaLibreCard
+        : spot?(RivalCard||PokerCard):(
+          <div style={{padding:"3rem",textAlign:"center",color:C.text2,fontSize:16}}>No hay spots con esa configuración.</div>
+        )
+      }
+    </div>
+  );
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"}}>
+      {D?(
+        <div style={{maxWidth:1400,margin:"0 auto",padding:"28px 40px 40px",display:"grid",gridTemplateColumns:"360px 1fr",gap:40,alignItems:"start"}}>
+          <div style={{position:"sticky",top:28}}>{LeftPanel}</div>
+          {RightPanel}
+        </div>
+      ):(
+        <div style={{maxWidth:480,margin:"0 auto",padding:"16px 16px 40px"}}>
+          {LeftPanel}
+          <div style={{marginTop:16}}>{RightPanel}</div>
+        </div>
+      )}
+    </div>
+  );
+}
