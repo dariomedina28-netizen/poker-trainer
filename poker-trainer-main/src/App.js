@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 
-const SHEET_ID = "1VxMfS1v0lRlaq6SNITzDjDOebrKYBQV8u2N1HkGyxQU";
-const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=Hoja1`;
-const TB = "SRP IP con iniciativa vs REG";
-const TR = "Juego vs recreacionales";
+const SHEET_ID = "1G8Zgv5qxk1bAV1qrnnFlxRcoSlsSMd02XZUybsGx0-c";
+const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=v2`;
+const TP = "Preflop RFI";
+const TR = "Recreacionales";
 const TV = "Rivales";
 
 const SKILL_GENERAR = `# Skill: Generar Escenario de Entrenamiento
@@ -15,37 +15,30 @@ Generar un spot sorpresa sin input del usuario. Variar posición, calle y tipo d
 ### Dirigido
 El usuario describe lo que quiere practicar. Interpretar su descripción y generar el spot correspondiente.
 
-## Variables obligatorias de cada spot
-- Posición del héroe y rival
-- Tipo de oponente: Recreacional / Regular / Desconocido
-- Calle: Preflop / Flop / Turn / River
-- Acción previa
-- Board (si aplica)
-- Mano del héroe
-- Pot actual en BBs
-- Stack efectivo en BBs
-- Decisión a tomar
-
 ## Reglas
 - No repetir posición y calle consecutivamente en modo aleatorio
 - 1 spot de preflop por cada 4 postflop mínimo
 - Oponente recreacional: sesgo hacia spots de valor
 - Oponente regular: spots más cercanos a GTO
+- Usar símbolos de palos: ♠ ♥ ♦ ♣ en todas las cartas
 
-## Formato de salida EXACTO — no añadas nada antes ni después
-🃏 SPOT — PRÁCTICA LIBRE
+## Formato de salida EXACTO — copia este formato sin añadir nada antes ni después
 
-Calle: [X] | Posición: [X] vs [X] | Oponente: [X]
-Stack efectivo: [X bb] | Pot: [X bb]
+Calle: [Preflop|Flop|Turn|River]
+Posición: [pos héroe] vs [pos villain]
+Oponente: [Recreacional|Regular|Desconocido]
+Stacks: [X bb efectivos]
+Pot: [X bb]
+Seq: [acción preflop sin prefijo] | Flop: [acción flop] | Turn: [acción turn] | River: [acción river]
+Board: [cartas flop] | [carta turn] | [carta river]
+Mano: [carta1] [carta2]
+Opts: [Opción1] | [Opción2] | [Opción3] | [Opción4]
 
-Acción previa:
-[descripción]
-
-Board: [X X X]
-Tu mano: [X X]
-
-¿Qué haces?
-[ ] Bet [ ] Check [ ] Call [ ] Fold [ ] Raise`;
+Reglas de formato:
+- Seq: solo incluir calles hasta la calle activa. Preflop no lleva prefijo. Ej flop: "BTN abre 2.5bb BB llama | Flop: BB chequea BTN apuesta 4bb"
+- Board: separar calles con |. Solo mostrar hasta la calle activa. Ej turn: "A♠ K♦ 2♣ | 7♥"
+- Si es Preflop: Board y Seq solo tienen la parte preflop (sin pipes)
+- Opts: opciones relevantes para la situación separadas por |`;
 
 const SKILL_EVALUAR = `# Skill: Evaluar Decisión del Usuario
 ## Marco de análisis según rival
@@ -115,16 +108,86 @@ const C = {
   purple:"#a855f7",purpleBg:"#3b1a5f",purpleTxt:"#d8b4fe",
 };
 
+// ── Normalización de cartas ───────────────────────────
+// Acepta símbolos (A♥ K♦) o letras (Ah Kd). Internamente todo se guarda en
+// letras (h/d/c/s). Se renderiza con símbolos vía SUIT_SYM.
+const SUIT_SYM={h:"♥",d:"♦",c:"♣",s:"♠"};
+const SYM_TO_LETTER={"♥":"h","♦":"d","♣":"c","♠":"s"};
+const SUITS=["h","d","c","s"];
+
+// Normaliza una sola carta a formato letra (ej. "A♥"→"Ah", "th"→"Th", "10d"→"Td").
+function normCard(c){
+  if(!c)return c;
+  let t=c.trim();
+  if(!t)return t;
+  // separa palo (último char, sea símbolo o letra) del rango
+  let suit=t.slice(-1);
+  let rank=t.slice(0,-1);
+  if(SYM_TO_LETTER[suit])suit=SYM_TO_LETTER[suit];
+  else suit=suit.toLowerCase();
+  if(!SUITS.includes(suit))return t; // no es una carta reconocible, se deja igual
+  if(rank==="10")rank="T";
+  rank=rank.toUpperCase();
+  return rank+suit;
+}
+
+// Aplica un mapa de permutación de palos {h:'s',...} a una carta en letras.
+function mapCardSuit(card,perm){
+  if(!card||card==="|")return card;
+  const suit=card.slice(-1);
+  if(!perm[suit])return card;
+  return card.slice(0,-1)+perm[suit];
+}
+
+// Convierte una cadena de cartas separadas por '|' (calles) / espacios en
+// tokens normalizados a letras, preservando los '|' como separadores.
+function normCardString(txt){
+  if(!txt)return "";
+  return txt.split("|").map(seg=>
+    seg.trim().split(/\s+/).filter(Boolean).map(normCard).join(" ")
+  ).join(" | ");
+}
+
+// Renderiza una carta en letras a símbolos para mostrar (ej. "Ah"→"A♥").
+function displayCard(card){
+  if(!card||card==="|")return card;
+  const suit=card.slice(-1);
+  if(!SUIT_SYM[suit])return card;
+  return card.slice(0,-1)+SUIT_SYM[suit];
+}
+
+const FUENTES_VALIDAS=["matematica","consenso","poblacion","mento","solver","fundamento","sin_validar"];
+
 function parseSpot(row){
+  const split=(v)=>v?v.split(";").map(s=>s.trim()).filter(Boolean):[];
+  const opts=split(row.opts);
+  const aceptables=split(row.aceptables);
+  // hand puede traer variantes separadas por '/'; cada variante se normaliza.
+  const handVariants=(row.hand||"").split("/").map(v=>normCardString(v.trim())).filter(Boolean);
+  let fuente=(row.fuente||"").trim().toLowerCase();
+  if(!FUENTES_VALIDAS.includes(fuente))fuente="sin_validar";
+  // baseline: "Accion:pct;Accion:pct" → [{accion,pct}]
+  const baseline=split(row.baseline).map(p=>{
+    const idx=p.lastIndexOf(":");
+    if(idx<0)return null;
+    const accion=p.slice(0,idx).trim();
+    const pct=parseFloat(p.slice(idx+1));
+    if(!accion||isNaN(pct))return null;
+    return{accion,pct};
+  }).filter(Boolean);
   return{
-    tema:row.tema||"",calle:row.calle||"",conc:row.conc||"",
-    hero:row.hero||"",vill:row.vill||"",stacks:row.stacks||"",
-    seq:row.seq||"",board:row.board||"",hand:row.hand||"",
-    correct:row.correct||"",ec:row.ec||"",el:row.el||"",
-    sens:row.sens==="TRUE",
-    leaks:row.leaks?row.leaks.split(";").map(s=>s.trim()).filter(Boolean):[],
-    opts:row.opts?row.opts.split(";").map(s=>s.trim()).filter(Boolean):null,
-    tema_apunte:row.tema_apunte||"",
+    tema:row.tema||"",tema_apunte:row.tema_apunte||"",conc:row.conc||"",
+    calle:row.calle||"",hero:row.hero||"",vill:row.vill||"",stacks:row.stacks||"",
+    seq:row.seq||"",
+    board:row.board||"",   // crudo: Rivales lo usa como stats; póker lo normaliza al servir
+    hand:row.hand||"",     // crudo: Rivales lo usa como descripción de texto
+    handVariants,          // solo póker: variantes normalizadas a letras
+    opts,aceptables,baseline,
+    exploit:(row.exploit||"").trim(),
+    fuente,
+    ec:row.ec||"",el:row.el||"",
+    leaks:split(row.leaks),
+    sens:(row.sens||"").trim().toUpperCase()==="TRUE",
   };
 }
 
@@ -190,13 +253,96 @@ function Timeline({seq,calle,size="md"}){
   );
 }
 
-function getOpts(s){
-  if(s.opts&&s.opts.length)return s.opts;
-  const seg=s.seq.toLowerCase().split("|").find(p=>p.includes(s.calle.toLowerCase()+":"))||"";
-  if(seg.includes("overbet")||(seg.includes("apuesta")&&!seg.includes("checkea")))return["Fold","Call","Raise 75%","Raise 125%"];
-  if(seg.includes("donkea"))return["Fold","Call","Raise 75%","Raise 125%"];
-  if(seg.includes("resube"))return["Fold","Call"];
-  return["Check","Bet 25%","Bet 33%","Bet 50%","Bet 75%","Bet 80%","Bet 125%"];
+// Convierte un string de cartas normalizadas (letras, separadas por espacios y
+// '|') a su representación con símbolos para mostrar.
+function displayCards(txt){
+  if(!txt)return "";
+  return txt.split(/\s+/).filter(Boolean).map(displayCard).join(" ");
+}
+
+// ── Guard de integridad (Paso 4) ──────────────────────
+// Devuelve {valid, reason}. Un spot inválido no entra al pool jugable.
+function validateSpot(s){
+  if(s.tema===TV)return{valid:true};   // Rivales tiene su propio formato (opts explícitas ya validadas por parse)
+  if(!s.opts||!s.opts.length)return{valid:false,reason:"opts vacío"};
+  if(!s.aceptables||!s.aceptables.length)return{valid:false,reason:"aceptables vacío"};
+  const fuera=s.aceptables.filter(a=>!s.opts.includes(a));
+  if(fuera.length)return{valid:false,reason:`aceptables fuera de opts: ${fuera.join(", ")}`};
+  return{valid:true};
+}
+
+// ── Servido de spot con variación de cartas (Paso 5) ──
+// Elige una variante de mano al azar y aplica una permutación isomórfica de
+// palos a board + mano (la MISMA permutación a ambos). sens=TRUE la desactiva.
+function shuffledPerm(){
+  const s=[...SUITS];
+  for(let i=s.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [s[i],s[j]]=[s[j],s[i]];
+  }
+  return{h:s[0],d:s[1],c:s[2],s:s[3]};
+}
+function applyPermToString(txt,perm){
+  return txt.split(/\s+/).filter(Boolean)
+    .map(tok=>tok==="|"?tok:mapCardSuit(tok,perm)).join(" ");
+}
+function serveSpot(spot){
+  if(spot.tema===TV)return spot;   // Rivales: sin cartas, no se transforma
+  const variants=spot.handVariants.length?spot.handVariants:[""];
+  const handNorm=variants[Math.floor(Math.random()*variants.length)];
+  const boardNorm=normCardString(spot.board);
+  const perm=spot.sens?{h:"h",d:"d",c:"c",s:"s"}:shuffledPerm();
+  return{
+    ...spot,
+    board:displayCards(applyPermToString(boardNorm,perm)),
+    hand:displayCards(applyPermToString(handNorm,perm)),
+  };
+}
+
+// ── Badge de fuente (Paso 3) ──────────────────────────
+const FUENTE_META={
+  matematica:{label:"Matemática",bg:C.greenBg,txt:C.greenTxt,bd:C.green},
+  solver:{label:"Solver",bg:C.greenBg,txt:C.greenTxt,bd:C.green},
+  consenso:{label:"Consenso",bg:C.blueBg,txt:C.blueTxt,bd:C.blue},
+  fundamento:{label:"Fundamento",bg:"#0b2f3a",txt:"#7dd3fc",bd:"#38bdf8"},   // azul claro
+  mento:{label:"Mento Poker",bg:C.purpleBg,txt:C.purpleTxt,bd:C.purple},
+  poblacion:{label:"Población",bg:"#451a03",txt:"#fbbf24",bd:C.amber},        // ámbar
+  sin_validar:{label:"⚠ sin validar",bg:C.redBg,txt:C.redTxt,bd:C.red},
+};
+function SourceBadge({fuente}){
+  const m=FUENTE_META[fuente]||FUENTE_META.sin_validar;
+  return <span style={{fontSize:11,padding:"3px 10px",borderRadius:99,background:m.bg,color:m.txt,
+    border:`1px solid ${m.bd}`,fontWeight:700,whiteSpace:"nowrap"}}>{m.label}</span>;
+}
+
+// Barras de frecuencia baseline (Paso 3)
+function BaselineBars({items,D}){
+  if(!items||!items.length)return null;
+  return(
+    <div style={{background:C.bg3,borderRadius:12,padding:D?"14px 16px":"11px 13px",marginBottom:D?12:10,border:`1px solid ${C.border}`}}>
+      <div style={{fontSize:D?11:10,color:C.text2,textTransform:"uppercase",letterSpacing:".07em",fontWeight:700,marginBottom:10}}>Baseline</div>
+      {items.map((it,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:i<items.length-1?7:0}}>
+          <span style={{fontSize:D?13:12,color:C.text,minWidth:88,fontWeight:600}}>{it.accion}</span>
+          <div style={{flex:1,height:8,background:C.bg,borderRadius:4,overflow:"hidden"}}>
+            <div style={{width:Math.max(0,Math.min(100,it.pct))+"%",height:"100%",background:C.blue,borderRadius:4}}/>
+          </div>
+          <span style={{fontSize:D?13:12,color:C.blueTxt,fontWeight:700,minWidth:40,textAlign:"right"}}>{it.pct}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Caja de ajuste explotativo (Paso 3)
+function ExploitBox({text,D}){
+  if(!text)return null;
+  return(
+    <div style={{background:"#3a2a05",borderRadius:12,padding:D?"14px 16px":"11px 13px",marginBottom:D?12:10,border:`1px solid ${C.amber}`}}>
+      <div style={{fontSize:D?11:10,color:"#fbbf24",textTransform:"uppercase",letterSpacing:".07em",fontWeight:700,marginBottom:8}}>Ajuste explotativo</div>
+      <div style={{fontSize:D?14:13,color:"#fde68a",lineHeight:1.6}}>{text}</div>
+    </div>
+  );
 }
 
 const DIV=<div style={{borderTop:`1px solid ${C.border}`,margin:"16px 0"}}/>;
@@ -210,9 +356,11 @@ export default function App(){
   const[apunte,setApunte]=useState("");
   const[calle,setCalle]=useState("Todas");
   const[conc,setConc]=useState("");
-  const[spot,setSpot]=useState(null);
+  const[served,setServed]=useState(null);
   const[chosen,setChosen]=useState(null);
   const[evaled,setEvaled]=useState(false);
+  const[hideSinValidar,setHideSinValidar]=useState(true);
+  const[showInvalid,setShowInvalid]=useState(false);
   const[stats,setStats]=useState({total:0,ok:0,ko:0});
   const[trC,setTrC]=useState({});
   const[trL,setTrL]=useState({});
@@ -229,6 +377,7 @@ export default function App(){
   const[plWantFull,setPlWantFull]=useState(false);
   const[plFullFeedback,setPlFullFeedback]=useState(null);
   const[plLastMeta,setPlLastMeta]=useState("");
+  const[plParsed,setPlParsed]=useState(null);
 
   useEffect(()=>{
     const h=()=>setIsDesktop(window.innerWidth>=900);
@@ -243,10 +392,12 @@ export default function App(){
       const headers=allRows[0];
       const parsed=allRows.slice(1).map(row=>{
         const obj={};headers.forEach((h,i)=>{obj[h]=row[i]||"";});return obj;
-      }).map(parseSpot).filter(s=>s.tema&&s.hand);
+      }).map(parseSpot).filter(s=>s.tema&&s.hand)
+        .map(s=>{const v=validateSpot(s);return{...s,_valid:v.valid,_invalidReason:v.reason||""};});
       setSpots(parsed);
       setLastLoaded(new Date().toLocaleTimeString("es-MX"));
-      if(parsed.length)setSpot(parsed[Math.floor(Math.random()*parsed.length)]);
+      const jugables=parsed.filter(s=>s._valid&&!(hideSinValidar&&s.fuente==="sin_validar"));
+      if(jugables.length)serveNew(jugables[Math.floor(Math.random()*jugables.length)]);
       setLoading(false);
     }).catch(()=>{setError("No se pudo conectar al Google Sheets.");setLoading(false);});
   }
@@ -254,7 +405,9 @@ export default function App(){
   useEffect(()=>{loadSpots();},[]);
 
   const pool=useMemo(()=>spots.filter(s=>{
-    if(bloque==="Regulares"&&s.tema!==TB)return false;
+    if(!s._valid)return false;                                  // guard: inválidos fuera del pool jugable
+    if(hideSinValidar&&s.fuente==="sin_validar")return false;   // filtro legacy (Paso 6)
+    if(bloque==="Preflop"&&s.tema!==TP)return false;
     if(bloque==="Recreacionales"&&s.tema!==TR)return false;
     if(bloque==="Calentamiento"&&s.tema!=="Calentamiento")return false;
     if(bloque==="Mis leaks"&&s.tema!=="Mis leaks")return false;
@@ -263,45 +416,76 @@ export default function App(){
     if(calle!=="Todas"&&s.calle!==calle)return false;
     if(conc&&s.conc!==conc)return false;
     return true;
-  }),[spots,bloque,apunte,calle,conc]);
+  }),[spots,bloque,apunte,calle,conc,hideSinValidar]);
+
+  const invalidSpots=useMemo(()=>spots.filter(s=>!s._valid),[spots]);
 
   const allApuntes=useMemo(()=>{
     let filtered=spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks"&&s.tema!==TV);
-    if(bloque==="Regulares")filtered=filtered.filter(s=>s.tema===TB);
+    if(bloque==="Preflop")filtered=filtered.filter(s=>s.tema===TP);
     if(bloque==="Recreacionales")filtered=filtered.filter(s=>s.tema===TR);
     return[...new Set(filtered.map(s=>s.tema_apunte))].sort();
   },[spots,bloque]);
 
   const allConcs=useMemo(()=>[...new Set(spots.map(s=>s.conc))].sort(),[spots]);
 
-  function nextSpot(p=pool){if(!p.length)return;setSpot(p[Math.floor(Math.random()*p.length)]);setChosen(null);setEvaled(false);}
+  // Sirve un spot: guarda el crudo (para la lógica del pool) y su versión
+  // servida (variante de mano + palos permutados). Re-servir el mismo spot
+  // produce palos distintos cada vez.
+  function serveNew(raw){setServed(serveSpot(raw));setChosen(null);setEvaled(false);}
+  function nextSpot(p=pool){if(!p.length)return;serveNew(p[Math.floor(Math.random()*p.length)]);}
   function evaluate(){
-    if(!chosen||evaled||!spot)return;setEvaled(true);
-    const ok=chosen===spot.correct;
+    if(!chosen||evaled||!served)return;setEvaled(true);
+    const ok=served.aceptables.includes(chosen);
     setStats(s=>({total:s.total+1,ok:s.ok+(ok?1:0),ko:s.ko+(ok?0:1)}));
-    if(spot.tema!==TV){
-      setTrC(t=>{const n={...t};if(!n[spot.calle])n[spot.calle]={ok:0,n:0};n[spot.calle].ok+=ok?1:0;n[spot.calle].n++;return n;});
-      setTrL(t=>{const n={...t};spot.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
+    if(served.tema!==TV){
+      setTrC(t=>{const n={...t};if(!n[served.calle])n[served.calle]={ok:0,n:0};n[served.calle].ok+=ok?1:0;n[served.calle].n++;return n;});
+      setTrL(t=>{const n={...t};served.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
     }
   }
   function reset(){setStats({total:0,ok:0,ko:0});setTrC({});setTrL({});nextSpot();}
 
-  function resetPL(){setPlMode(null);setPlInput("");setPlSpot(null);setPlOpts([]);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlLoading(false);setPlWantFull(false);setPlFullFeedback(null);}
+  function parsePlFeedback(text){
+    const verdictMatch=text.match(/(✅\s*CORRECTO|❌\s*INCORRECTO|⚠️\s*ACEPTABLE)/i);
+    const verdict=verdictMatch?verdictMatch[1].trim():"";
+    const ecMatch=text.match(/Explicación corta[:\s]*\n?([\s\S]*?)(?:\n-{3,}|\n¿Quieres|$)/i);
+    const ec=ecMatch?ecMatch[1].trim():"";
+    const isCorrect=verdict.toLowerCase().includes("correcto");
+    const isAcceptable=verdict.toLowerCase().includes("aceptable");
+    return{verdict,ec,isCorrect,isAcceptable};
+  }
+
+  function parsePlSpot(text){
+    const get=(re,i=1)=>{const m=text.match(re);return m?m[i].trim():"";};
+    const calle=get(/^Calle:\s*(\S+)/m);
+    const posM=text.match(/^Posición:\s*(.+?)\s+vs\s+(.+)/m);
+    const hero=posM?posM[1].trim():"";
+    const vill=posM?posM[2].trim():"";
+    const oponente=get(/^Oponente:\s*(.+)/m);
+    const stacks=get(/^Stacks:\s*(.+)/m);
+    const pot=get(/^Pot:\s*(.+)/m);
+    const seq=get(/^Seq:\s*(.+)/m);
+    const board=get(/^Board:\s*(.+)/m);
+    const hand=get(/^Mano:\s*(.+)/m);
+    const optsRaw=get(/^Opts:\s*(.+)/m);
+    const opts=optsRaw?optsRaw.split("|").map(s=>s.trim()).filter(Boolean):["Bet","Check","Call","Fold","Raise"];
+    return{calle,hero,vill,oponente,stacks,pot,seq,board,hand,opts};
+  }
+
+  function resetPL(){setPlMode(null);setPlInput("");setPlSpot(null);setPlParsed(null);setPlOpts([]);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlLoading(false);setPlWantFull(false);setPlFullFeedback(null);}
 
   async function generarSpot(){
-    setPlLoading(true);setPlSpot(null);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlWantFull(false);setPlFullFeedback(null);
+    setPlLoading(true);setPlSpot(null);setPlParsed(null);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlWantFull(false);setPlFullFeedback(null);
     try{
       const userMsg=plMode==="aleatorio"
         ?`Genera un spot aleatorio.${plLastMeta?` Evita repetir: ${plLastMeta}`:""}`
         :`Genera un spot sobre: ${plInput}`;
       const text=await callClaude(SKILL_GENERAR,userMsg);
       setPlSpot(text);
-      const matches=text.match(/\[\s*\]\s*([^\[^\n]+)/g)||[];
-      const opts=matches.map(m=>m.replace(/\[\s*\]\s*/,"").trim()).filter(Boolean);
-      setPlOpts(opts.length?opts:["Bet","Check","Call","Fold","Raise"]);
-      const calleM=text.match(/Calle:\s*(\w+)/);
-      const posM=text.match(/Posición:\s*([^|]+)/);
-      if(calleM&&posM)setPlLastMeta(`${calleM[1]} / ${posM[1].trim()}`);
+      const parsed=parsePlSpot(text);
+      setPlParsed(parsed);
+      setPlOpts(parsed.opts);
+      if(parsed.calle&&parsed.hero)setPlLastMeta(`${parsed.calle} / ${parsed.hero}`);
     }catch(e){setPlSpot(`Error: ${e.message}`);}
     setPlLoading(false);
   }
@@ -346,11 +530,15 @@ export default function App(){
   );
 
   // ── SPOT DE RIVALES ──────────────────────────────
-  const RivalCard=spot&&spot.tema===TV?(
+  const rivalOk=served&&served.aceptables.includes(chosen);
+  const RivalCard=served&&served.tema===TV?(
     <div style={{background:C.bg2,border:`1px solid ${C.purple}`,borderRadius:16,padding:D?32:16}}>
-      <div style={{marginBottom:D?20:14}}>
-        <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Ejercicio</div>
-        <div style={{fontSize:D?16:13,fontWeight:700,color:C.purpleTxt}}>{spot.conc}</div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:D?20:14}}>
+        <div>
+          <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Ejercicio</div>
+          <div style={{fontSize:D?16:13,fontWeight:700,color:C.purpleTxt}}>{served.conc}</div>
+        </div>
+        <SourceBadge fuente={served.fuente}/>
       </div>
       {DIV}
 
@@ -358,14 +546,14 @@ export default function App(){
       <div style={{background:C.bg3,borderRadius:12,padding:D?"20px 24px":"14px 16px",marginBottom:D?20:16,border:`1px solid ${C.border2}`}}>
         {SL("Estadísticas del rival","#a855f7")}
         <div style={{fontSize:D?18:15,fontWeight:700,color:C.text,lineHeight:1.8,fontFamily:"monospace"}}>
-          {spot.board.split("|").map((s,i)=><div key={i}>{s.trim()}</div>)}
+          {served.board.split("|").map((s,i)=><div key={i}>{s.trim()}</div>)}
         </div>
       </div>
 
       {/* Description */}
       <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 20px":"12px 14px",marginBottom:D?20:16,border:`1px solid ${C.border2}`}}>
         {SL("Observación en mesa")}
-        <div style={{fontSize:D?15:13,color:C.text,lineHeight:1.7}}>{spot.hand}</div>
+        <div style={{fontSize:D?15:13,color:C.text,lineHeight:1.7}}>{served.hand}</div>
       </div>
 
       {DIV}
@@ -373,10 +561,10 @@ export default function App(){
 
       {/* Options */}
       <div style={{display:"flex",flexDirection:"column",gap:D?10:8,marginBottom:D?20:16}}>
-        {(spot.opts||[]).map(o=>{
+        {(served.opts||[]).map(o=>{
           let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
           if(evaled){
-            if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
+            if(served.aceptables.includes(o)){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
             else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
           }else if(o===chosen){bg=C.purpleBg;border=C.purple;color=C.purpleTxt;bw="2px";}
           return(
@@ -392,15 +580,16 @@ export default function App(){
       {evaled&&(
         <>
           <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
-            background:chosen===spot.correct?C.greenBg:C.redBg,
-            color:chosen===spot.correct?C.greenTxt:C.redTxt,
-            border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
-            <strong>{chosen===spot.correct?"✓ Correcto":`✗ La respuesta era: ${spot.correct}`}</strong>
-            <br/>{spot.ec}
+            background:rivalOk?C.greenBg:C.redBg,color:rivalOk?C.greenTxt:C.redTxt,
+            border:`1px solid ${rivalOk?C.green:C.red}`}}>
+            <strong>{rivalOk?"✓ Correcto":`✗ La respuesta era: ${served.aceptables.join(" · ")}`}</strong>
+            <br/>{served.ec}
           </div>
+          <BaselineBars items={served.baseline} D={D}/>
+          <ExploitBox text={served.exploit} D={D}/>
           <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.7,marginBottom:12,color:C.text2,border:`1px solid ${C.border}`}}>
             {SL("Explicación completa","#a855f7")}
-            {spot.el}
+            {served.el}
           </div>
         </>
       )}
@@ -416,10 +605,11 @@ export default function App(){
   ):null;
 
   // ── SPOT DE POKER NORMAL ──────────────────────────
-  const PokerCard=spot&&spot.tema!==TV?(
+  const pokerOk=served&&served.aceptables.includes(chosen);
+  const PokerCard=served&&served.tema!==TV?(
     <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?32:16}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
-        {[["Tema",spot.tema],["Apunte",spot.tema_apunte||"—"],["Posición",`${spot.hero} vs ${spot.vill} · ${spot.stacks}`],["Calle",spot.calle]].map(([l,v])=>(
+        {[["Tema",served.tema],["Apunte",served.tema_apunte||"—"],["Posición",`${served.hero} vs ${served.vill} · ${served.stacks}`],["Calle",served.calle]].map(([l,v])=>(
           <div key={l}>
             <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{l}</div>
             <div style={{fontSize:D?15:12,fontWeight:700,color:C.text}}>{v}</div>
@@ -428,19 +618,19 @@ export default function App(){
       </div>
       {DIV}
       {SL("Secuencia")}
-      <Timeline seq={spot.seq} calle={spot.calle} size={D?"lg":"md"}/>
+      <Timeline seq={served.seq} calle={served.calle} size={D?"lg":"md"}/>
       {DIV}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
-        <div>{SL("Board")}<Cards txt={spot.board} board calle={spot.calle} size={D?"lg":"md"}/></div>
-        <div>{SL("Tu mano")}<Cards txt={spot.hand} size={D?"lg":"md"}/></div>
+        <div>{SL("Board")}<Cards txt={served.board} board calle={served.calle} size={D?"lg":"md"}/></div>
+        <div>{SL("Tu mano")}<Cards txt={served.hand} size={D?"lg":"md"}/></div>
       </div>
       {DIV}
       {SL("¿Cuál es tu decisión?")}
       <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
-        {getOpts(spot).map(o=>{
+        {served.opts.map(o=>{
           let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
           if(evaled){
-            if(o===spot.correct){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
+            if(served.aceptables.includes(o)){bg=C.greenBg;border=C.green;color=C.greenTxt;bw="2px";}
             else if(o===chosen){bg=C.redBg;border=C.red;color=C.redTxt;bw="2px";}
           }else if(o===chosen){bg=C.blueBg;border=C.blue;color=C.blueTxt;bw="2px";}
           return(
@@ -453,20 +643,24 @@ export default function App(){
       {evaled&&(
         <>
           <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?14:10,
-            background:chosen===spot.correct?C.greenBg:C.redBg,
-            color:chosen===spot.correct?C.greenTxt:C.redTxt,
-            border:`1px solid ${chosen===spot.correct?C.green:C.red}`}}>
-            <strong>{chosen===spot.correct?"✓ Correcto":`✗ La mejor acción era: ${spot.correct}`}</strong>
-            <br/>{spot.ec}
+            background:pokerOk?C.greenBg:C.redBg,color:pokerOk?C.greenTxt:C.redTxt,
+            border:`1px solid ${pokerOk?C.green:C.red}`}}>
+            <strong>{pokerOk?"✓ Correcto":`✗ Acciones aceptables: ${served.aceptables.join(" · ")}`}</strong>
+            <br/>{served.ec}
           </div>
+          <BaselineBars items={served.baseline} D={D}/>
+          <ExploitBox text={served.exploit} D={D}/>
           <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?15:13,lineHeight:1.7,marginBottom:D?16:12,color:C.text2,border:`1px solid ${C.border}`}}>
-            {SL("Concepto")}
-            <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{spot.conc}</div>
-            {spot.el}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:10}}>
+              <span style={{fontSize:D?11:10,color:C.text2,textTransform:"uppercase",letterSpacing:".07em",fontWeight:700}}>Concepto</span>
+              <SourceBadge fuente={served.fuente}/>
+            </div>
+            <div style={{fontSize:D?15:13,fontWeight:700,color:C.blueTxt,marginBottom:10}}>{served.conc}</div>
+            {served.el}
           </div>
-          {spot.leaks.length>0&&(
+          {served.leaks.length>0&&(
             <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12}}>
-              {spot.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
+              {served.leaks.map(l=><span key={l} style={{fontSize:D?12:10,padding:D?"4px 12px":"3px 8px",borderRadius:99,background:C.leak,color:C.leakTxt,fontWeight:700}}>{l}</span>)}
             </div>
           )}
         </>
@@ -537,26 +731,45 @@ export default function App(){
           )}
 
           {/* Spot generado */}
-          {plSpot&&(
+          {plSpot&&plParsed&&(
             <>
-              <div style={{background:C.bg3,borderRadius:12,padding:D?"18px 20px":"14px 16px",marginBottom:D?20:16,border:`1px solid ${C.border2}`,fontFamily:"inherit",fontSize:D?14:13,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap"}}>
-                {plSpot}
+              {/* Grid info igual que PokerCard */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
+                {[["Oponente",plParsed.oponente||"—"],["Calle",plParsed.calle||"—"],["Posición",`${plParsed.hero} vs ${plParsed.vill}`],["Stacks / Pot",`${plParsed.stacks} · ${plParsed.pot}`]].map(([l,v])=>(
+                  <div key={l}>
+                    <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{l}</div>
+                    <div style={{fontSize:D?15:12,fontWeight:700,color:C.text}}>{v}</div>
+                  </div>
+                ))}
               </div>
+              {DIV}
+
+              {/* Timeline */}
+              {plParsed.seq&&<>{SL("Secuencia")}<Timeline seq={plParsed.seq} calle={plParsed.calle} size={D?"lg":"md"}/>{DIV}</>}
+
+              {/* Board y mano */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
+                <div>{SL("Board")}{plParsed.board?<Cards txt={plParsed.board} board calle={plParsed.calle} size={D?"lg":"md"}/>:<span style={{color:C.text3,fontSize:13}}>—</span>}</div>
+                <div>{SL("Tu mano")}<Cards txt={plParsed.hand} size={D?"lg":"md"}/></div>
+              </div>
+              {DIV}
 
               {/* Opciones */}
               {!plEvaled&&(
                 <div style={{marginBottom:D?16:12}}>
-                  {SL("Tu decisión")}
+                  {SL("¿Cuál es tu decisión?")}
                   <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8}}>
-                    {plOpts.map(o=>(
-                      <button key={o} onClick={()=>!plEvaled&&!plLoading&&setPlChosen(o)} style={{
-                        padding:D?"12px 20px":"10px 14px",borderRadius:10,
-                        border:`${plChosen===o?"2px":"1px"} solid ${plChosen===o?C.green:C.border2}`,
-                        background:plChosen===o?C.greenBg:C.bg3,
-                        color:plChosen===o?C.greenTxt:C.text,
-                        fontSize:D?14:13,cursor:"pointer",fontWeight:plChosen===o?700:500,fontFamily:"inherit"
-                      }}>{o}</button>
-                    ))}
+                    {plOpts.map(o=>{
+                      const sel=plChosen===o;
+                      return(
+                        <button key={o} onClick={()=>!plEvaled&&!plLoading&&setPlChosen(o)} style={{
+                          padding:D?"12px 24px":"10px 18px",borderRadius:10,
+                          border:`${sel?"2px":"1px"} solid ${sel?C.green:C.border2}`,
+                          background:sel?C.greenBg:C.bg3,color:sel?C.greenTxt:C.text,
+                          fontSize:D?15:14,cursor:"pointer",fontWeight:sel?700:600,fontFamily:"inherit"
+                        }}>{o}</button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -568,37 +781,45 @@ export default function App(){
                     style={{...btnStyle(C.green,"#fff",C.green),opacity:(!plChosen||plLoading)?0.5:1}}>
                     {plLoading?"Evaluando…":"Evaluar ↗"}
                   </button>
-                  <button onClick={()=>{setPlSpot(null);setPlOpts([]);generarSpot();}} style={btnStyle(C.bg3,C.text2,C.border2)}>Otro spot</button>
+                  <button onClick={()=>{setPlSpot(null);setPlParsed(null);setPlOpts([]);generarSpot();}} style={btnStyle(C.bg3,C.text2,C.border2)}>Otro spot</button>
                 </div>
               )}
 
               {/* Feedback */}
-              {plFeedback&&(
-                <div style={{marginBottom:D?14:12}}>
-                  <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.8,color:C.text,border:`1px solid ${C.border}`,whiteSpace:"pre-wrap"}}>
-                    {plFeedback}
+              {plFeedback&&(()=>{
+                const{verdict,ec,isCorrect,isAcceptable}=parsePlFeedback(plFeedback);
+                const bgCol=isCorrect?C.greenBg:isAcceptable?"#451a03":C.redBg;
+                const borderCol=isCorrect?C.green:isAcceptable?C.amber:C.red;
+                const txtCol=isCorrect?C.greenTxt:isAcceptable?"#fbbf24":C.redTxt;
+                return(
+                  <div style={{marginBottom:D?14:12}}>
+                    <div style={{padding:D?"16px 18px":"12px 14px",borderRadius:12,fontSize:D?15:13,lineHeight:1.7,marginBottom:D?10:8,
+                      background:bgCol,color:txtCol,border:`1px solid ${borderCol}`}}>
+                      <strong>{verdict||"Evaluación"}</strong>
+                      {ec&&<><br/>{ec}</>}
+                    </div>
+                    {!plWantFull&&(
+                      <button onClick={pedirAnalisis} disabled={plLoading}
+                        style={{...btnStyle(C.bg3,C.greenTxt,C.green),marginTop:8,fontSize:D?13:12,opacity:plLoading?0.5:1}}>
+                        {plLoading?"Cargando…":"Ver análisis completo →"}
+                      </button>
+                    )}
                   </div>
-                  {!plWantFull&&(
-                    <button onClick={pedirAnalisis} disabled={plLoading}
-                      style={{...btnStyle(C.bg3,C.greenTxt,C.green),marginTop:10,fontSize:D?13:12,opacity:plLoading?0.5:1}}>
-                      {plLoading?"Cargando…":"Ver análisis completo →"}
-                    </button>
-                  )}
-                </div>
-              )}
+                );
+              })()}
 
               {/* Análisis completo */}
               {plFullFeedback&&(
-                <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.8,color:C.text2,border:`1px solid ${C.border}`,whiteSpace:"pre-wrap",marginBottom:D?14:12}}>
+                <div style={{background:C.bg3,borderRadius:12,padding:D?"16px 18px":"12px 14px",fontSize:D?14:13,lineHeight:1.7,color:C.text2,border:`1px solid ${C.border}`,marginBottom:D?14:12}}>
                   {SL("Análisis completo",C.green)}
-                  {plFullFeedback}
+                  <div style={{whiteSpace:"pre-wrap",color:C.text,lineHeight:1.8}}>{plFullFeedback}</div>
                 </div>
               )}
 
               {/* Botones post-eval */}
               {plEvaled&&(
                 <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                  <button onClick={()=>{setPlSpot(null);setPlOpts([]);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlWantFull(false);setPlFullFeedback(null);generarSpot();}}
+                  <button onClick={()=>{setPlSpot(null);setPlParsed(null);setPlOpts([]);setPlChosen(null);setPlEvaled(false);setPlFeedback(null);setPlWantFull(false);setPlFullFeedback(null);generarSpot();}}
                     style={btnStyle(C.green,"#fff",C.green)}>
                     Siguiente ↗
                   </button>
@@ -636,13 +857,12 @@ export default function App(){
       <div>
         <div style={{fontSize:12,color:C.text2,marginBottom:8}}>Bloque</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {["Todos","Regulares","Recreacionales","Calentamiento","Mis leaks","Rivales","Práctica Libre"].map(b=>{
+          {["Todos","Preflop","Calentamiento","Mis leaks","Recreacionales","Rivales"].map(b=>{
             const isRival=b==="Rivales";
-            const isPL=b==="Práctica Libre";
             const active=bloque===b;
-            const accentCol=isPL?C.green:isRival?C.purple:C.blue;
-            const accentBg=isPL?C.greenBg:isRival?C.purpleBg:C.blueBg;
-            const accentTxt=isPL?C.greenTxt:isRival?C.purpleTxt:C.blueTxt;
+            const accentCol=isRival?C.purple:C.blue;
+            const accentBg=isRival?C.purpleBg:C.blueBg;
+            const accentTxt=isRival?C.purpleTxt:C.blueTxt;
             return(
               <button key={b} onClick={()=>{setBloque(b);setApunte("");setConc("");}} style={{
                 padding:"6px 14px",borderRadius:99,fontSize:12,cursor:"pointer",fontFamily:"inherit",
@@ -654,6 +874,44 @@ export default function App(){
           })}
         </div>
       </div>
+
+      {/* Toggle: ocultar contenido sin validar (Paso 6) */}
+      {bloque!=="Práctica Libre"&&(
+        <button onClick={()=>setHideSinValidar(v=>!v)} style={{
+          display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:10,
+          border:`1px solid ${C.border2}`,background:C.bg2,color:C.text2,cursor:"pointer",
+          fontFamily:"inherit",fontSize:12,textAlign:"left"}}>
+          <span style={{width:36,height:20,borderRadius:99,background:hideSinValidar?C.green:C.bg3,
+            border:`1px solid ${hideSinValidar?C.green:C.border2}`,position:"relative",flexShrink:0,transition:"background .15s"}}>
+            <span style={{position:"absolute",top:1,left:hideSinValidar?17:1,width:16,height:16,borderRadius:"50%",background:"#fff",transition:"left .15s"}}/>
+          </span>
+          <span>Ocultar sin validar</span>
+        </button>
+      )}
+
+      {/* Contador de spots inválidos (Paso 4) */}
+      {invalidSpots.length>0&&(
+        <div>
+          <button onClick={()=>setShowInvalid(v=>!v)} title="Spots excluidos del pool por fallar el guard de integridad" style={{
+            display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",padding:"8px 12px",
+            borderRadius:10,border:`1px solid ${C.red}`,background:C.redBg,color:C.redTxt,cursor:"pointer",
+            fontFamily:"inherit",fontSize:12,fontWeight:700}}>
+            <span>⚠ {invalidSpots.length} spot{invalidSpots.length>1?"s":""} inválido{invalidSpots.length>1?"s":""}</span>
+            <span>{showInvalid?"▲":"▼"}</span>
+          </button>
+          {showInvalid&&(
+            <div style={{marginTop:6,background:C.bg2,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",maxHeight:220,overflowY:"auto"}}>
+              {invalidSpots.map((s,i)=>(
+                <div key={i} style={{fontSize:11,color:C.text2,padding:"6px 0",borderBottom:i<invalidSpots.length-1?`1px solid ${C.border}`:"none",lineHeight:1.5}}>
+                  <span style={{color:C.text,fontWeight:600}}>{s.tema_apunte||s.tema||"(sin tema)"}</span>
+                  {s.conc?<span style={{color:C.text3}}> · {s.conc}</span>:null}
+                  <br/><span style={{color:C.redTxt}}>{s._invalidReason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filtros — solo para no-rivales y no Práctica Libre */}
       {bloque!=="Rivales"&&bloque!=="Práctica Libre"&&(
@@ -730,7 +988,7 @@ export default function App(){
     <div>
       {bloque==="Práctica Libre"
         ? PracticaLibreCard
-        : spot?(RivalCard||PokerCard):(
+        : served?(RivalCard||PokerCard):(
           <div style={{padding:"3rem",textAlign:"center",color:C.text2,fontSize:16}}>No hay spots con esa configuración.</div>
         )
       }
