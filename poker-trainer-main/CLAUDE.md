@@ -72,18 +72,22 @@ Fuente de datos: **Google Sheets** (esquema v2). Todos los spots jugables vienen
 
 ### Bloques y valores exactos de `tema`
 
-Los botones del selector mapean 1:1 con el valor de la columna `tema`:
+Los botones del selector mapean 1:1 con el valor de la columna `tema` (mismo orden que en la UI):
 
 | Bloque UI | Valor en columna `tema` |
 |-----------|------------------------|
 | Todos | (sin filtro de tema) |
 | Preflop | `Preflop RFI` |
-| Calentamiento | `Calentamiento` |
-| Mis leaks | `Mis leaks` |
+| Defensa BB | `Defensa BB` |
+| vs REG | `SRP IP vs REG` |
 | Recreacionales | `Recreacionales` |
-| Rivales | `Rivales` |
+| Mis leaks | `Mis leaks` |
+| Calentamiento | `Calentamiento` |
+| Rivales | `Rivales` (filtro especial de tipo Rivales, no es un tema de estrategia) |
 
-Constantes en `App.js`: `TP="Preflop RFI"`, `TR="Recreacionales"`, `TV="Rivales"`.
+Constantes en `App.js`: `TP="Preflop RFI"`, `TD="Defensa BB"`, `TG="SRP IP vs REG"`, `TR="Recreacionales"`, `TV="Rivales"`. Calentamiento y Mis leaks se filtran por literal.
+
+> Los valores de `tema` deben coincidir **exactamente** (mayúsculas y espacios) con los del Sheet. Nombres viejos ya eliminados: `SRP IP con iniciativa vs REG`, `Juego vs recreacionales`, y los bloques `Regulares` / `Práctica Libre`.
 
 ### Bloque Rivales — formato especial
 

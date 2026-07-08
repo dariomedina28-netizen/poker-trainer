@@ -3,6 +3,8 @@ import { useState, useEffect, useMemo } from "react";
 const SHEET_ID = "1G8Zgv5qxk1bAV1qrnnFlxRcoSlsSMd02XZUybsGx0-c";
 const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=v2`;
 const TP = "Preflop RFI";
+const TD = "Defensa BB";
+const TG = "SRP IP vs REG";
 const TR = "Recreacionales";
 const TV = "Rivales";
 
@@ -408,9 +410,11 @@ export default function App(){
     if(!s._valid)return false;                                  // guard: inválidos fuera del pool jugable
     if(hideSinValidar&&s.fuente==="sin_validar")return false;   // filtro legacy (Paso 6)
     if(bloque==="Preflop"&&s.tema!==TP)return false;
+    if(bloque==="Defensa BB"&&s.tema!==TD)return false;
+    if(bloque==="vs REG"&&s.tema!==TG)return false;
     if(bloque==="Recreacionales"&&s.tema!==TR)return false;
-    if(bloque==="Calentamiento"&&s.tema!=="Calentamiento")return false;
     if(bloque==="Mis leaks"&&s.tema!=="Mis leaks")return false;
+    if(bloque==="Calentamiento"&&s.tema!=="Calentamiento")return false;
     if(bloque==="Rivales"&&s.tema!==TV)return false;
     if(apunte&&s.tema_apunte!==apunte)return false;
     if(calle!=="Todas"&&s.calle!==calle)return false;
@@ -423,6 +427,8 @@ export default function App(){
   const allApuntes=useMemo(()=>{
     let filtered=spots.filter(s=>s.tema_apunte&&s.tema!=="Calentamiento"&&s.tema!=="Mis leaks"&&s.tema!==TV);
     if(bloque==="Preflop")filtered=filtered.filter(s=>s.tema===TP);
+    if(bloque==="Defensa BB")filtered=filtered.filter(s=>s.tema===TD);
+    if(bloque==="vs REG")filtered=filtered.filter(s=>s.tema===TG);
     if(bloque==="Recreacionales")filtered=filtered.filter(s=>s.tema===TR);
     return[...new Set(filtered.map(s=>s.tema_apunte))].sort();
   },[spots,bloque]);
@@ -857,7 +863,7 @@ export default function App(){
       <div>
         <div style={{fontSize:12,color:C.text2,marginBottom:8}}>Bloque</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {["Todos","Preflop","Calentamiento","Mis leaks","Recreacionales","Rivales"].map(b=>{
+          {["Todos","Preflop","Defensa BB","vs REG","Recreacionales","Mis leaks","Calentamiento","Rivales"].map(b=>{
             const isRival=b==="Rivales";
             const active=bloque===b;
             const accentCol=isRival?C.purple:C.blue;
