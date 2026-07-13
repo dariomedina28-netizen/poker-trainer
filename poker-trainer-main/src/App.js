@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { supabase } from "./supabase";
 
 const SHEET_ID = "1G8Zgv5qxk1bAV1qrnnFlxRcoSlsSMd02XZUybsGx0-c";
 const SHEETS_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=v2`;
@@ -349,6 +350,108 @@ function ExploitBox({text,D}){
 
 const DIV=<div style={{borderTop:`1px solid ${C.border}`,margin:"16px 0"}}/>;
 
+// ── Fase C: agregaciones de progreso ──────────────────
+const MS_DAY=86400000;
+const ORDEN_CALLE=["Preflop","Flop","Turn","River"];
+const DOM_MIN_INTENTOS=20;   // mínimo para que un lote califique
+const DOM_VENTANA=30;        // se mira sobre los últimos 30 intentos del tema
+const DOM_UMBRAL=85;         // ≥85% = lote dominado
+
+const pct=(ok,n)=>n?Math.round(ok/n*100):null;
+const accColor=a=>a===null?C.text3:a>=85?C.greenTxt:a>=60?C.amber:C.redTxt;
+
+// rows llegan ordenadas por created_at DESC (más reciente primero)
+function aggProgreso(rows){
+  const now=Date.now(), corte30=now-30*MS_DAY;
+  const es30=r=>new Date(r.created_at).getTime()>=corte30;
+  const acumular=(mapa,clave,r)=>{
+    if(!mapa[clave])mapa[clave]={clave,ok:0,n:0,ok30:0,n30:0,ultimos:[]};
+    const e=mapa[clave];
+    e.n++; if(r.correcto)e.ok++;
+    if(es30(r)){e.n30++; if(r.correcto)e.ok30++;}
+    if(e.ultimos.length<DOM_VENTANA)e.ultimos.push(r);   // DESC ⇒ los primeros son los más recientes
+    return e;
+  };
+  const peorPrimero=(a,b)=>(a.ok/a.n)-(b.ok/b.n);
+
+  const mLeak={},mCalle={},mTema={};
+  rows.forEach(r=>{
+    (r.leaks||[]).forEach(l=>{if(l)acumular(mLeak,l,r);});
+    acumular(mCalle,r.calle||"—",r);
+    acumular(mTema,r.tema||"—",r);
+  });
+
+  const porLeak=Object.values(mLeak).sort(peorPrimero);
+  const porCalle=Object.values(mCalle).sort((a,b)=>{
+    const ia=ORDEN_CALLE.indexOf(a.clave), ib=ORDEN_CALLE.indexOf(b.clave);
+    return (ia<0?99:ia)-(ib<0?99:ib);
+  });
+  const porTema=Object.values(mTema).map(e=>{
+    const u=e.ultimos, uOk=u.filter(r=>r.correcto).length, uAcc=pct(uOk,u.length);
+    const califica=u.length>=DOM_MIN_INTENTOS;
+    return{...e,ultN:u.length,ultAcc:uAcc,dominado:califica&&uAcc>=DOM_UMBRAL,faltanDatos:!califica};
+  }).sort(peorPrimero);
+
+  // Tendencia: accuracy global de las últimas 8 semanas (la última es la actual)
+  const semanas=[];
+  for(let i=7;i>=0;i--){
+    const fin=now-i*7*MS_DAY, ini=fin-7*MS_DAY;
+    const rs=rows.filter(r=>{const t=new Date(r.created_at).getTime();return t>=ini&&t<fin;});
+    const ok=rs.filter(r=>r.correcto).length;
+    semanas.push({label:i===0?"Ahora":`−${i}s`,n:rs.length,acc:pct(ok,rs.length)});
+  }
+
+  const totalOk=rows.filter(r=>r.correcto).length;
+  return{porLeak,porCalle,porTema,semanas,totalN:rows.length,totalOk,accGlobal:pct(totalOk,rows.length)};
+}
+
+// Fila: nombre + accuracy 30 días vs histórico total
+function FilaAcc({nombre,e,D,extra}){
+  const a30=pct(e.ok30,e.n30), aTot=pct(e.ok,e.n);
+  const Celda=({a,n})=>(
+    <div style={{textAlign:"right",minWidth:D?74:64}}>
+      <span style={{fontSize:D?14:13,fontWeight:700,color:accColor(a)}}>{a===null?"—":a+"%"}</span>
+      <span style={{fontSize:11,color:C.text3,marginLeft:5}}>({n})</span>
+    </div>
+  );
+  return(
+    <div style={{padding:D?"10px 0":"9px 0",borderTop:`1px solid ${C.border}`}}>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{flex:1,minWidth:0,fontSize:D?13:12,color:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{nombre}</span>
+          {extra}
+        </div>
+        <Celda a={a30} n={e.n30}/>
+        <Celda a={aTot} n={e.n}/>
+      </div>
+      <div style={{height:4,borderRadius:99,background:C.bg3,marginTop:7,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${aTot||0}%`,background:accColor(aTot),transition:"width .2s"}}/>
+      </div>
+    </div>
+  );
+}
+
+// Encabezado de las dos columnas (30 días / total)
+function CabeceraAcc({D}){
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10,paddingBottom:6}}>
+      <div style={{flex:1}}/>
+      <div style={{textAlign:"right",minWidth:D?74:64,fontSize:10,color:C.text3,textTransform:"uppercase",letterSpacing:".05em"}}>30 días</div>
+      <div style={{textAlign:"right",minWidth:D?74:64,fontSize:10,color:C.text3,textTransform:"uppercase",letterSpacing:".05em"}}>Total</div>
+    </div>
+  );
+}
+
+function SeccionProg({titulo,sub,children,D}){
+  return(
+    <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?"20px 22px":"15px 16px",marginBottom:D?16:12}}>
+      <div style={{fontSize:D?15:14,fontWeight:700,color:C.text,marginBottom:sub?3:10}}>{titulo}</div>
+      {sub&&<div style={{fontSize:11,color:C.text3,marginBottom:10}}>{sub}</div>}
+      {children}
+    </div>
+  );
+}
+
 export default function App(){
   const[spots,setSpots]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -368,6 +471,11 @@ export default function App(){
   const[trL,setTrL]=useState({});
   const[showTracker,setShowTracker]=useState(false);
   const[isDesktop,setIsDesktop]=useState(window.innerWidth>=900);
+  // Fase C — vista de progreso (lee de Supabase al abrirla, no en tiempo real)
+  const[vista,setVista]=useState("entrenar");   // "entrenar" | "progreso"
+  const[prog,setProg]=useState(null);
+  const[progLoading,setProgLoading]=useState(false);
+  const[progError,setProgError]=useState(null);
   const[plMode,setPlMode]=useState(null);
   const[plInput,setPlInput]=useState("");
   const[plSpot,setPlSpot]=useState(null);
@@ -447,9 +555,41 @@ export default function App(){
     if(served.tema!==TV){
       setTrC(t=>{const n={...t};if(!n[served.calle])n[served.calle]={ok:0,n:0};n[served.calle].ok+=ok?1:0;n[served.calle].n++;return n;});
       setTrL(t=>{const n={...t};served.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
+      // Fase C — persistencia fire-and-forget en Supabase. Capa adicional: no
+      // afecta al tracker de sesión de arriba. Si falla (red/RLS/etc.) solo se
+      // loguea a consola y la app sigue normal.
+      if(supabase){
+        supabase.from("poker_intentos").insert({
+          tema:served.tema,
+          tema_apunte:served.tema_apunte||null,
+          conc:served.conc||null,
+          calle:served.calle||null,
+          fuente:served.fuente||null,
+          leaks:served.leaks||[],
+          chosen,
+          correcto:ok,
+        }).then(({error})=>{if(error)console.error("[supabase] insert poker_intentos falló:",error.message);})
+          .catch(e=>console.error("[supabase] insert poker_intentos error:",e?.message||e));
+      }
     }
   }
   function reset(){setStats({total:0,ok:0,ko:0});setTrC({});setTrL({});nextSpot();}
+
+  // Fase C — carga los intentos persistidos y calcula las agregaciones.
+  async function loadProgreso(){
+    if(!supabase){setProgError("Supabase no está configurado (faltan las variables en .env.local).");return;}
+    setProgLoading(true);setProgError(null);
+    const{data,error:err}=await supabase
+      .from("poker_intentos")
+      .select("tema,calle,leaks,correcto,created_at")
+      .order("created_at",{ascending:false})
+      .limit(5000);
+    if(err){setProgError(err.message);setProgLoading(false);return;}
+    setProg(aggProgreso(data||[]));
+    setProgLoading(false);
+  }
+  // Se dispara al abrir la vista (no en tiempo real); el botón ↻ refresca.
+  useEffect(()=>{if(vista==="progreso")loadProgreso();},[vista]);
 
   function parsePlFeedback(text){
     const verdictMatch=text.match(/(✅\s*CORRECTO|❌\s*INCORRECTO|⚠️\s*ACEPTABLE)/i);
@@ -839,6 +979,106 @@ export default function App(){
     </div>
   );
 
+  // ── VISTA DE PROGRESO (Fase C) ────────────────────
+  const maxSem=prog?Math.max(...prog.semanas.map(s=>s.acc||0),1):1;
+  const ProgresoCard=(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:D?18:14}}>
+        <div>
+          <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Vista</div>
+          <div style={{fontSize:D?18:15,fontWeight:700,color:C.blueTxt}}>📈 Progreso</div>
+        </div>
+        <button onClick={loadProgreso} disabled={progLoading} title="Refrescar" style={{
+          display:"flex",alignItems:"center",gap:7,padding:"7px 14px",borderRadius:99,fontSize:12,fontFamily:"inherit",
+          border:`1px solid ${C.border2}`,background:C.bg2,color:C.text2,cursor:progLoading?"default":"pointer",opacity:progLoading?.6:1}}>
+          <span style={{fontSize:14}}>↻</span>{progLoading?"Cargando…":"Refrescar"}
+        </button>
+      </div>
+
+      {progError&&(
+        <div style={{background:C.redBg,border:`1px solid ${C.red}`,borderRadius:12,padding:"14px 16px",color:C.redTxt,fontSize:13}}>
+          No se pudo cargar el progreso: {progError}
+        </div>
+      )}
+
+      {!progError&&progLoading&&!prog&&(
+        <div style={{padding:"3rem",textAlign:"center",color:C.text2,fontSize:15}}>Cargando progreso…</div>
+      )}
+
+      {!progError&&prog&&prog.totalN===0&&(
+        <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?"48px 32px":"36px 20px",textAlign:"center"}}>
+          <div style={{fontSize:34,marginBottom:12}}>🗒️</div>
+          <div style={{fontSize:D?16:15,fontWeight:700,color:C.text,marginBottom:6}}>Aún no hay intentos registrados</div>
+          <div style={{fontSize:13,color:C.text2,lineHeight:1.6}}>Responde spots en la vista <strong style={{color:C.text}}>Entrenar</strong> y vuelve — cada respuesta queda guardada acá.</div>
+        </div>
+      )}
+
+      {!progError&&prog&&prog.totalN>0&&(
+        <div>
+          {/* Resumen */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:D?12:8,marginBottom:D?16:12}}>
+            {[["Intentos",prog.totalN,C.text],["Aciertos",prog.totalOk,C.green],["Accuracy",prog.accGlobal+"%",accColor(prog.accGlobal)]].map(([l,v,c])=>(
+              <div key={l} style={{background:C.bg2,borderRadius:12,padding:D?"14px 8px":"10px 8px",textAlign:"center",border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:11,color:C.text2,marginBottom:6}}>{l}</div>
+                <div style={{fontSize:D?24:19,fontWeight:800,color:c}}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Accuracy por leak — peor primero */}
+          <SeccionProg titulo="Accuracy por leak" sub="Ordenado del peor al mejor. Trabajá de arriba hacia abajo." D={D}>
+            {prog.porLeak.length===0
+              ? <div style={{fontSize:12,color:C.text3,paddingTop:6}}>Todavía no hay intentos con leaks asociados.</div>
+              : <><CabeceraAcc D={D}/>{prog.porLeak.map(e=><FilaAcc key={e.clave} nombre={e.clave} e={e} D={D}/>)}</>}
+          </SeccionProg>
+
+          {/* Accuracy por calle */}
+          <SeccionProg titulo="Accuracy por calle" D={D}>
+            <CabeceraAcc D={D}/>
+            {prog.porCalle.map(e=><FilaAcc key={e.clave} nombre={e.clave} e={e} D={D}/>)}
+          </SeccionProg>
+
+          {/* Accuracy por bloque + lote dominado */}
+          <SeccionProg titulo="Accuracy por bloque" sub={`Lote dominado ✓ = ≥${DOM_UMBRAL}% en los últimos ${DOM_VENTANA} intentos del bloque (mínimo ${DOM_MIN_INTENTOS}).`} D={D}>
+            <CabeceraAcc D={D}/>
+            {prog.porTema.map(e=>{
+              const badge=e.faltanDatos?(
+                <span style={{fontSize:10,padding:"2px 8px",borderRadius:99,background:C.bg3,color:C.text3,border:`1px solid ${C.border2}`,whiteSpace:"nowrap"}}>
+                  faltan datos ({e.ultN}/{DOM_MIN_INTENTOS})
+                </span>
+              ):e.dominado?(
+                <span style={{fontSize:10,padding:"2px 8px",borderRadius:99,background:C.greenBg,color:C.greenTxt,border:`1px solid ${C.green}`,fontWeight:700,whiteSpace:"nowrap"}}>
+                  Lote dominado ✓
+                </span>
+              ):(
+                <span style={{fontSize:10,padding:"2px 8px",borderRadius:99,background:C.bg3,color:C.text2,border:`1px solid ${C.border2}`,whiteSpace:"nowrap"}}>
+                  últimos {e.ultN}: {e.ultAcc}%
+                </span>
+              );
+              return <FilaAcc key={e.clave} nombre={e.clave} e={e} D={D} extra={badge}/>;
+            })}
+          </SeccionProg>
+
+          {/* Tendencia 8 semanas */}
+          <SeccionProg titulo="Tendencia" sub="Accuracy global por semana — últimas 8." D={D}>
+            <div style={{display:"flex",alignItems:"flex-end",gap:D?10:6,height:120,paddingTop:8}}>
+              {prog.semanas.map((s,i)=>(
+                <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+                  <div style={{fontSize:10,fontWeight:700,color:s.acc===null?C.text3:accColor(s.acc)}}>{s.acc===null?"—":s.acc+"%"}</div>
+                  <div style={{width:"100%",height:70,display:"flex",alignItems:"flex-end",background:C.bg3,borderRadius:6,overflow:"hidden"}}>
+                    <div style={{width:"100%",height:`${s.acc===null?0:Math.max(s.acc/maxSem*100,3)}%`,background:s.acc===null?C.bg3:accColor(s.acc),borderRadius:"6px 6px 0 0",transition:"height .2s"}}/>
+                  </div>
+                  <div style={{fontSize:10,color:C.text3}}>{s.label}</div>
+                  <div style={{fontSize:9,color:C.text3}}>n={s.n}</div>
+                </div>
+              ))}
+            </div>
+          </SeccionProg>
+        </div>
+      )}
+    </div>
+  );
+
   const LeftPanel=(
     <div style={{display:"flex",flexDirection:"column",gap:D?20:16}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -857,6 +1097,20 @@ export default function App(){
             <div style={{fontSize:D?26:20,fontWeight:800,color:c}}>{v}</div>
           </div>
         ))}
+      </div>
+
+      {/* Vista: Entrenar / Progreso (Fase C) */}
+      <div style={{display:"flex",gap:6,background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:4}}>
+        {[["entrenar","🃏 Entrenar"],["progreso","📈 Progreso"]].map(([v,l])=>{
+          const active=vista===v;
+          return(
+            <button key={v} onClick={()=>setVista(v)} style={{
+              flex:1,padding:"8px 10px",borderRadius:9,fontSize:12,cursor:"pointer",fontFamily:"inherit",border:"none",
+              background:active?C.blueBg:"transparent",
+              color:active?C.blueTxt:C.text2,
+              fontWeight:active?700:400}}>{l}</button>
+          );
+        })}
       </div>
 
       {/* Bloques */}
@@ -992,7 +1246,9 @@ export default function App(){
 
   const RightPanel=(
     <div>
-      {bloque==="Práctica Libre"
+      {vista==="progreso"
+        ? ProgresoCard
+        : bloque==="Práctica Libre"
         ? PracticaLibreCard
         : served?(RivalCard||PokerCard):(
           <div style={{padding:"3rem",textAlign:"center",color:C.text2,fontSize:16}}>No hay spots con esa configuración.</div>
