@@ -368,6 +368,12 @@ const DOM_UMBRAL=85;         // ≥85% = lote dominado
 const pct=(ok,n)=>n?Math.round(ok/n*100):null;
 const accColor=a=>a===null?C.text3:a>=85?C.greenTxt:a>=60?C.amber:C.redTxt;
 
+// Resumen de fin de sesión: id único por sesión de navegador (no persiste en localStorage a propósito).
+function makeSessionId(){
+  if(typeof crypto!=="undefined"&&crypto.randomUUID)return crypto.randomUUID();
+  return `sess_${Date.now()}_${Math.random().toString(36).slice(2,10)}`;
+}
+
 // rows llegan ordenadas por created_at DESC (más reciente primero)
 function aggProgreso(rows){
   const now=Date.now(), corte30=now-30*MS_DAY;
@@ -484,6 +490,11 @@ export default function App(){
   const[prog,setProg]=useState(null);
   const[progLoading,setProgLoading]=useState(false);
   const[progError,setProgError]=useState(null);
+  // Resumen de fin de sesión: session_id vive solo en estado de React (no localStorage).
+  const[sessionId,setSessionId]=useState(makeSessionId);
+  const[sessionAttempts,setSessionAttempts]=useState([]);
+  const[resumen,setResumen]=useState(null);
+  const[resumenLoading,setResumenLoading]=useState(false);
   const[plMode,setPlMode]=useState(null);
   const[plInput,setPlInput]=useState("");
   const[plSpot,setPlSpot]=useState(null);
@@ -563,6 +574,20 @@ export default function App(){
     if(served.tema!==TV){
       setTrC(t=>{const n={...t};if(!n[served.calle])n[served.calle]={ok:0,n:0};n[served.calle].ok+=ok?1:0;n[served.calle].n++;return n;});
       setTrL(t=>{const n={...t};served.leaks.forEach(l=>{if(!n[l])n[l]={ok:0,n:0};n[l].ok+=ok?1:0;n[l].n++;});return n;});
+      // Resumen de fin de sesión: copia local del intento (independiente del tracker de arriba,
+      // se resetea al "Cerrar sesión" en vez de al hacer click en el botón Reiniciar).
+      setSessionAttempts(a=>[...a,{
+        tema:served.tema,
+        tema_apunte:served.tema_apunte||null,
+        conc:served.conc||null,
+        calle:served.calle||null,
+        fuente:served.fuente||null,
+        leaks:served.leaks||[],
+        chosen,
+        aceptables:served.aceptables||[],
+        ec:served.ec||"",
+        correcto:ok,
+      }]);
       // Fase C — persistencia fire-and-forget en Supabase. Capa adicional: no
       // afecta al tracker de sesión de arriba. Si falla (red/RLS/etc.) solo se
       // loguea a consola y la app sigue normal.
@@ -576,6 +601,7 @@ export default function App(){
           leaks:served.leaks||[],
           chosen,
           correcto:ok,
+          session_id:sessionId,
         }).then(({error})=>{if(error)console.error("[supabase] insert poker_intentos falló:",error.message);})
           .catch(e=>console.error("[supabase] insert poker_intentos error:",e?.message||e));
       }
@@ -598,6 +624,38 @@ export default function App(){
   }
   // Se dispara al abrir la vista (no en tiempo real); el botón ↻ refresca.
   useEffect(()=>{if(vista==="progreso")loadProgreso();},[vista]);
+
+  // Resumen de fin de sesión: arma el resumen con los intentos de sesionAttempts
+  // (no se toca el histórico), compara contra el accuracy histórico y arranca
+  // una sesión nueva (session_id nuevo, sessionAttempts vacío).
+  async function cerrarSesion(){
+    setResumenLoading(true);
+    let histAcc=null;
+    if(supabase){
+      try{
+        const{data,error:err}=await supabase.from("poker_intentos").select("correcto").limit(5000);
+        if(!err&&data)histAcc=pct(data.filter(r=>r.correcto).length,data.length);
+      }catch(e){console.error("[supabase] histórico error:",e?.message||e);}
+    }
+    const attempts=sessionAttempts;
+    const n=attempts.length;
+    const ok=attempts.filter(a=>a.correcto).length;
+    const accSesion=pct(ok,n);
+    const fallos=attempts.filter(a=>!a.correcto);
+    const prioridad=a=>a.tema==="Mis leaks"?0:(a.leaks&&a.leaks.length>0?1:2);
+    const peorFallo=fallos.length?[...fallos].sort((a,b)=>prioridad(a)-prioridad(b))[0]:null;
+    const mLeak={};
+    attempts.forEach(a=>{(a.leaks||[]).forEach(l=>{
+      if(!l)return;
+      if(!mLeak[l])mLeak[l]={leak:l,ok:0,n:0};
+      mLeak[l].n++; if(a.correcto)mLeak[l].ok++;
+    });});
+    const leaksSesion=Object.values(mLeak).sort((a,b)=>(a.ok/a.n)-(b.ok/b.n));
+    setResumen({n,ok,accSesion,peorFallo,leaksSesion,histAcc});
+    setResumenLoading(false);
+    setSessionId(makeSessionId());
+    setSessionAttempts([]);
+  }
 
   function parsePlFeedback(text){
     const verdictMatch=text.match(/(✅\s*CORRECTO|❌\s*INCORRECTO|⚠️\s*ACEPTABLE)/i);
@@ -1104,6 +1162,68 @@ export default function App(){
     </div>
   );
 
+  // ── RESUMEN DE FIN DE SESIÓN ────────────────────
+  const ResumenCard=resumen&&(
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:D?18:14}}>
+        <div>
+          <div style={{fontSize:D?11:10,color:C.text3,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Resumen</div>
+          <div style={{fontSize:D?18:15,fontWeight:700,color:C.blueTxt}}>🧾 Fin de sesión</div>
+        </div>
+        <button onClick={()=>setResumen(null)} style={btnStyle(C.bg2,C.text2,C.border)}>Cerrar</button>
+      </div>
+
+      {resumen.n===0?(
+        <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?"48px 32px":"36px 20px",textAlign:"center"}}>
+          <div style={{fontSize:34,marginBottom:12}}>🃏</div>
+          <div style={{fontSize:D?16:15,fontWeight:700,color:C.text,marginBottom:6}}>No respondiste ningún spot en esta sesión</div>
+          <div style={{fontSize:13,color:C.text2,lineHeight:1.6}}>Ya empezó una sesión nueva. Volvé a <strong style={{color:C.text}}>Entrenar</strong> cuando quieras.</div>
+        </div>
+      ):(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:D?12:8,marginBottom:D?16:12}}>
+            {[["Intentos",resumen.n,C.text],["Aciertos",resumen.ok,C.green],["Accuracy",resumen.accSesion+"%",accColor(resumen.accSesion)]].map(([l,v,c])=>(
+              <div key={l} style={{background:C.bg2,borderRadius:12,padding:D?"14px 8px":"10px 8px",textAlign:"center",border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:11,color:C.text2,marginBottom:6}}>{l}</div>
+                <div style={{fontSize:D?24:19,fontWeight:800,color:c}}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {resumen.peorFallo&&(
+            <SeccionProg titulo="Tu peor fallo" sub={resumen.peorFallo.tema==="Mis leaks"?"De tus manos analizadas (Mis leaks).":undefined} D={D}>
+              <div style={{fontSize:13,color:C.text,fontWeight:700,marginBottom:8}}>{resumen.peorFallo.conc||resumen.peorFallo.tema_apunte||resumen.peorFallo.tema}</div>
+              <div style={{fontSize:12,color:C.text2,marginBottom:4}}>Tu respuesta: <span style={{color:C.redTxt,fontWeight:700}}>{resumen.peorFallo.chosen}</span></div>
+              <div style={{fontSize:12,color:C.text2,marginBottom:10}}>Correcta: <span style={{color:C.greenTxt,fontWeight:700}}>{resumen.peorFallo.aceptables.join(" · ")}</span></div>
+              {resumen.peorFallo.ec&&<div style={{fontSize:12,color:C.text2,lineHeight:1.6,borderTop:`1px solid ${C.border}`,paddingTop:10}}>{resumen.peorFallo.ec}</div>}
+            </SeccionProg>
+          )}
+
+          <SeccionProg titulo="Leaks tocados en esta sesión" D={D}>
+            {resumen.leaksSesion.length===0
+              ? <div style={{fontSize:12,color:C.text3,paddingTop:6}}>No tocaste spots con leaks asociados.</div>
+              : resumen.leaksSesion.map(e=>{
+                  const a=Math.round(e.ok/e.n*100);
+                  return(
+                    <div key={e.leak} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderTop:`1px solid ${C.border}`}}>
+                      <span style={{fontSize:12,color:C.text}}>{e.leak}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:accColor(a)}}>{e.ok}/{e.n} · {a}%</span>
+                    </div>
+                  );
+                })}
+          </SeccionProg>
+
+          <SeccionProg titulo="Comparación" D={D}>
+            <div style={{fontSize:13,color:C.text2}}>
+              Esta sesión: <strong style={{color:accColor(resumen.accSesion)}}>{resumen.accSesion}%</strong>
+              {" · "}Tu histórico: {resumen.histAcc!==null?<strong style={{color:accColor(resumen.histAcc)}}>{resumen.histAcc}%</strong>:"—"}
+            </div>
+          </SeccionProg>
+        </div>
+      )}
+    </div>
+  );
+
   const LeftPanel=(
     <div style={{display:"flex",flexDirection:"column",gap:D?20:16}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -1124,18 +1244,25 @@ export default function App(){
         ))}
       </div>
 
-      {/* Vista: Entrenar / Progreso (Fase C) */}
-      <div style={{display:"flex",gap:6,background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:4}}>
-        {[["entrenar","🃏 Entrenar"],["progreso","📈 Progreso"]].map(([v,l])=>{
-          const active=vista===v;
-          return(
-            <button key={v} onClick={()=>setVista(v)} style={{
-              flex:1,padding:"8px 10px",borderRadius:9,fontSize:12,cursor:"pointer",fontFamily:"inherit",border:"none",
-              background:active?C.blueBg:"transparent",
-              color:active?C.blueTxt:C.text2,
-              fontWeight:active?700:400}}>{l}</button>
-          );
-        })}
+      {/* Vista: Entrenar / Progreso (Fase C) + Cerrar sesión (resumen) */}
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{display:"flex",gap:6,background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:4,flex:1}}>
+          {[["entrenar","🃏 Entrenar"],["progreso","📈 Progreso"]].map(([v,l])=>{
+            const active=vista===v;
+            return(
+              <button key={v} onClick={()=>setVista(v)} style={{
+                flex:1,padding:"8px 10px",borderRadius:9,fontSize:12,cursor:"pointer",fontFamily:"inherit",border:"none",
+                background:active?C.blueBg:"transparent",
+                color:active?C.blueTxt:C.text2,
+                fontWeight:active?700:400}}>{l}</button>
+            );
+          })}
+        </div>
+        <button onClick={cerrarSesion} disabled={resumenLoading} title="Ver resumen de esta sesión y empezar una nueva" style={{
+          fontSize:11,padding:"8px 10px",borderRadius:10,border:`1px solid ${C.border2}`,background:C.bg2,color:C.text2,
+          cursor:resumenLoading?"default":"pointer",fontFamily:"inherit",whiteSpace:"nowrap",opacity:resumenLoading?.6:1}}>
+          {resumenLoading?"…":"Cerrar sesión"}
+        </button>
       </div>
 
       {/* Bloques */}
@@ -1271,7 +1398,9 @@ export default function App(){
 
   const RightPanel=(
     <div>
-      {vista==="progreso"
+      {resumen
+        ? ResumenCard
+        : vista==="progreso"
         ? ProgresoCard
         : bloque==="Práctica Libre"
         ? PracticaLibreCard
