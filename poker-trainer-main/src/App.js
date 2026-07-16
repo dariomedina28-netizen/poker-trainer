@@ -191,7 +191,15 @@ function parseSpot(row){
     ec:row.ec||"",el:row.el||"",
     leaks:split(row.leaks),
     sens:(row.sens||"").trim().toUpperCase()==="TRUE",
+    // Columna opcional: si el Sheet no la tiene, queda "" y se usa el título por defecto.
+    pregunta:(row.pregunta||"").trim(),
   };
+}
+
+// ¿El campo viene sin contenido real? ("", "—", "-", espacios)
+function vacio(v){
+  const t=(v||"").trim();
+  return !t||t==="—"||t==="-";
 }
 
 function parseCards(txt){return txt?txt.trim().split(/\s+/).filter(Boolean):[];}
@@ -502,7 +510,7 @@ export default function App(){
       const headers=allRows[0];
       const parsed=allRows.slice(1).map(row=>{
         const obj={};headers.forEach((h,i)=>{obj[h]=row[i]||"";});return obj;
-      }).map(parseSpot).filter(s=>s.tema&&s.hand)
+      }).map(parseSpot).filter(s=>s.tema)   // sin exigir hand: los spots de concepto no la tienen
         .map(s=>{const v=validateSpot(s);return{...s,_valid:v.valid,_invalidReason:v.reason||""};});
       setSpots(parsed);
       setLastLoaded(new Date().toLocaleTimeString("es-MX"));
@@ -752,6 +760,10 @@ export default function App(){
 
   // ── SPOT DE POKER NORMAL ──────────────────────────
   const pokerOk=served&&served.aceptables.includes(chosen);
+  const hayBoard=served&&!vacio(served.board);
+  const hayMano=served&&!vacio(served.hand);
+  // Concepto puro: sin board, sin mano y con seq de concepto → tampoco hay historia que contar.
+  const conceptoPuro=served&&!hayBoard&&!hayMano&&/^Pregunta de concepto/i.test((served.seq||"").trim());
   const PokerCard=served&&served.tema!==TV?(
     <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:16,padding:D?32:16}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?"12px 32px":"8px 16px",marginBottom:D?20:14}}>
@@ -763,15 +775,28 @@ export default function App(){
         ))}
       </div>
       {DIV}
-      {SL("Secuencia")}
-      <Timeline seq={served.seq} calle={served.calle} size={D?"lg":"md"}/>
-      {DIV}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
-        <div>{SL("Board")}<Cards txt={served.board} board calle={served.calle} size={D?"lg":"md"}/></div>
-        <div>{SL("Tu mano")}<Cards txt={served.hand} size={D?"lg":"md"}/></div>
+      {/* Secuencia: se oculta solo en spots de concepto puro (sin board, sin mano y seq de concepto) */}
+      {!conceptoPuro&&(
+        <>
+          {SL("Secuencia")}
+          <Timeline seq={served.seq} calle={served.calle} size={D?"lg":"md"}/>
+          {DIV}
+        </>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:hayBoard&&hayMano?"1fr 1fr":"1fr",gap:D?32:16,marginBottom:D?20:16}}>
+        {hayBoard&&<div>{SL("Board")}<Cards txt={served.board} board calle={served.calle} size={D?"lg":"md"}/></div>}
+        <div>
+          {SL("Tu mano")}
+          {hayMano
+            ?<Cards txt={served.hand} size={D?"lg":"md"}/>
+            :<div style={{fontSize:D?13:12,color:C.text3,fontStyle:"italic",paddingTop:2}}>Pregunta de concepto — sin mano específica</div>}
+        </div>
       </div>
       {DIV}
-      {SL("¿Cuál es tu decisión?")}
+      {/* Título de las opciones: pregunta custom del Sheet, o el label de siempre */}
+      {served.pregunta
+        ?<div style={{fontSize:D?16:14,fontWeight:700,color:C.text,lineHeight:1.5,marginBottom:D?12:10}}>{served.pregunta}</div>
+        :SL("¿Cuál es tu decisión?")}
       <div style={{display:"flex",flexWrap:"wrap",gap:D?10:8,marginBottom:D?20:16}}>
         {served.opts.map(o=>{
           let bg=C.bg3,border=C.border2,color=C.text,bw="1px";
