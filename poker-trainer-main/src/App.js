@@ -230,22 +230,16 @@ function Cards({txt,board,calle,size="md"}){
   return<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>{cards.map((c,i)=><Card key={i} c={c} size={size}/>)}</div>;
 }
 
-function Timeline({seq,calle,size="md"}){
+// Timeline: SOLO indicador visual de en qué calle estamos (P—F—T—R). El texto
+// de la historia de la mano vive aparte en <SecuenciaTexto> a ancho completo,
+// para no truncarse en móvil (ver bug: acciones se cortaban bajo los nodos).
+function Timeline({calle,size="md"}){
   const streets=["Preflop","Flop","Turn","River"];
   const activeIdx={Flop:1,Turn:2,River:3}[calle]||0;
-  const parts=seq.split("|").map(s=>s.trim());
-  const actions={};
-  parts.forEach(p=>{
-    const pl=p.toLowerCase();
-    if(!pl.includes("flop:")&&!pl.includes("turn:")&&!pl.includes("river:"))actions["Preflop"]=p.replace(/preflop:/i,"").trim().slice(0,38);
-    if(pl.includes("flop:"))actions["Flop"]=p.replace(/flop:/i,"").trim().slice(0,38);
-    if(pl.includes("turn:"))actions["Turn"]=p.replace(/turn:/i,"").trim().slice(0,38);
-    if(pl.includes("river:"))actions["River"]=p.replace(/river:/i,"").trim().slice(0,38);
-  });
   const dotSize=size==="lg"?36:28;
   const fs=size==="lg"?13:11;
   return(
-    <div style={{display:"flex",gap:0,overflowX:"auto",paddingBottom:4,marginBottom:20}}>
+    <div style={{display:"flex",gap:0,paddingBottom:4,marginBottom:16}}>
       {streets.map((s,i)=>{
         const active=i===activeIdx;
         return(
@@ -256,7 +250,72 @@ function Timeline({seq,calle,size="md"}){
               background:active?C.blue:C.bg3,color:active?"#fff":C.text2,
               border:`2px solid ${active?C.blue:C.border}`}}>{s[0]}</div>
             <div style={{fontSize:fs,color:active?C.blueTxt:C.text2,marginTop:6,fontWeight:700}}>{s}</div>
-            {actions[s]&&<div style={{fontSize:size==="lg"?11:9,color:C.text3,marginTop:3,textAlign:"center",maxWidth:size==="lg"?120:80,lineHeight:1.4}}>{actions[s]}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Separa `seq` ("Preflop: ... | Flop: ... | Turn: ... | River: ...") en una
+// línea por calle. Devuelve null si no hay "|" (frase única) para que el
+// caller la muestre completa sin desglosar. Los fragmentos con prefijo
+// explícito ("Flop:", "Turn:", "River:") usan esa calle; los que no lo
+// traen (habitual en el fragmento de preflop) heredan la siguiente calle
+// en orden secuencial.
+function parseSeqLines(seq){
+  const parts=(seq||"").split("|").map(s=>s.trim()).filter(Boolean);
+  if(parts.length<=1)return null;
+  const streets=["Preflop","Flop","Turn","River"];
+  let ptr=0;
+  return parts.map(p=>{
+    const m=p.match(/^(preflop|flop|turn|river)\s*:\s*(.*)$/i);
+    let label,text;
+    if(m){
+      label=streets.find(s=>s.toLowerCase()===m[1].toLowerCase());
+      text=m[2].trim();
+      ptr=streets.indexOf(label)+1;
+    }else{
+      label=streets[Math.min(ptr,3)];
+      text=p;
+      ptr=Math.min(ptr+1,3);
+    }
+    return{label,text};
+  });
+}
+
+// Resalta sizes (bb, %, fracciones tipo 3/4) dentro de un texto para lectura rápida.
+function highlightSizes(text){
+  const re=/\d+(?:\.\d+)?\s?bb|\d+(?:\.\d+)?%|\d+\/\d+/gi;
+  const out=[];
+  let last=0,m;
+  while((m=re.exec(text))){
+    if(m.index>last)out.push(text.slice(last,m.index));
+    out.push(<strong key={m.index} style={{color:C.blueTxt,fontWeight:700}}>{m[0]}</strong>);
+    last=m.index+m[0].length;
+  }
+  if(last<text.length)out.push(text.slice(last));
+  return out;
+}
+
+// Bloque de texto legible a ancho completo con la historia de la mano —
+// nunca trunca (sin ellipsis/max-height/line-clamp), hace wrap normal.
+function SecuenciaTexto({seq,calle,size="md"}){
+  const D=size==="lg";
+  const raw=(seq||"").trim();
+  const lines=parseSeqLines(raw);
+  return(
+    <div style={{background:C.bg3,border:`1px solid ${C.border2}`,borderRadius:12,padding:D?"14px 16px":"12px 14px",display:"flex",flexDirection:"column",gap:D?10:8}}>
+      {!lines?(
+        <div style={{fontSize:D?14:13,color:C.text,lineHeight:1.7}}>{highlightSizes(raw)}</div>
+      ):lines.map((l,i)=>{
+        const active=l.label===calle;
+        return(
+          <div key={i} style={{display:"flex",gap:10,alignItems:"baseline",flexWrap:"wrap",
+            background:active?C.blueBg:"transparent",borderRadius:8,padding:"6px 8px"}}>
+            <div style={{minWidth:D?64:56,flexShrink:0,fontSize:D?12:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".04em",
+              color:active?C.blueTxt:C.text3}}>{l.label}</div>
+            <div style={{flex:1,minWidth:0,fontSize:D?14:13,color:active?C.text:C.text2,lineHeight:1.7}}>{highlightSizes(l.text)}</div>
           </div>
         );
       })}
@@ -837,7 +896,8 @@ export default function App(){
       {!conceptoPuro&&(
         <>
           {SL("Secuencia")}
-          <Timeline seq={served.seq} calle={served.calle} size={D?"lg":"md"}/>
+          <Timeline calle={served.calle} size={D?"lg":"md"}/>
+          {!vacio(served.seq)&&<div style={{marginTop:D?14:10,marginBottom:D?4:2}}><SecuenciaTexto seq={served.seq} calle={served.calle} size={D?"lg":"md"}/></div>}
           {DIV}
         </>
       )}
@@ -974,7 +1034,7 @@ export default function App(){
               {DIV}
 
               {/* Timeline */}
-              {plParsed.seq&&<>{SL("Secuencia")}<Timeline seq={plParsed.seq} calle={plParsed.calle} size={D?"lg":"md"}/>{DIV}</>}
+              {plParsed.seq&&<>{SL("Secuencia")}<Timeline calle={plParsed.calle} size={D?"lg":"md"}/><div style={{marginTop:D?14:10,marginBottom:D?4:2}}><SecuenciaTexto seq={plParsed.seq} calle={plParsed.calle} size={D?"lg":"md"}/></div>{DIV}</>}
 
               {/* Board y mano */}
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:D?32:16,marginBottom:D?20:16}}>
